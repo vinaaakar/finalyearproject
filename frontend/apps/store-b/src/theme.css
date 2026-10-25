@@ -1,0 +1,31 @@
+/* Bloom & Brew — warm terracotta + cream, serif display type, softer corners. */
+:root {
+  --font-body: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-display: "Didot", "Bodoni 72", Georgia, serif;
+  --radius: 14px;
+  --brand: #7c2d12;
+  --on-brand: #fff7ed;
+  --accent: #9a3412;
+  --on-accent: #fff7ed;
+  --focus: #2563eb;
+  --bg: #fdf8f1;
+  --surface: #fffdf9;
+  --surface-2: #f6ebdc;
+  --text: #2b1a12;
+  --muted: #6f5848;
+  --border: #e8d6c1;
+  --hero-bg: radial-gradient(circle at 80% 20%, #fde3c8 0%, #f6ebdc 45%, #f0dcc4 100%);
+  --hero-text: #2b1a12;
+  --ok: #166534; --ok-bg: #dcfce7;
+  --warn: #92400e; --warn-bg: #fef3c7;
+  --err: #991b1b; --err-bg: #fee2e2;
+  --info: #1e40af; --info-bg: #dbeafe;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a120e; --surface: #241812; --surface-2: #2f2018; --text: #f6ebdc; --muted: #c4ab96; --border: #4a3324;
+    --hero-bg: radial-gradient(circle at 80% 20%, #4a2a18 0%, #2f2018 60%); --hero-text: #f6ebdc;
+    --brand: #9a3412; --accent: #c2410c; --link: #fdba74;
+    --ok: #86efac; --ok-bg: #14532d; --warn: #fcd34d; --warn-bg: #4a3410; --err: #fca5a5; --err-bg: #4c1414; --info: #93c5fd; --info-bg: #1e2f5c;
+  }
+}

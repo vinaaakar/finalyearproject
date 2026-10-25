@@ -1,0 +1,28 @@
+# Secrets
+.env
+*.pem
+*.key
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# Runtime
+.run/
+*.log
+.DS_Store
+
+# More secrets / sensitive data (defensive)
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.sql.gz
+*.dump
+backups/

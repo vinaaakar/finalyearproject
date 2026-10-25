@@ -1,0 +1,19 @@
+{
+  "name": "avc-frontend",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev:a": "npm run dev -w store-a",
+    "dev:b": "npm run dev -w store-b",
+    "build": "npm run build -w store-a && npm run build -w store-b"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.28.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "5.4.11"
+  }
+}
