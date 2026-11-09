@@ -12,6 +12,7 @@ from datetime import date, timedelta
 import psycopg
 
 from .config import load_settings
+from .policy_translations import POLICY_TRANSLATIONS
 from .security import hash_password
 from .stores import StoreId
 
@@ -21,6 +22,8 @@ AGENT_PASSWORD = "AgentDemo!2026"
 SEED: dict[StoreId, dict] = {
     StoreId.STORE_A: {
         "profile": ("Summit Trail Co.", "help@summittrail.example.com", "Mon–Fri 8am–6pm MT", "USD"),
+        # (standard, free-shipping minimum, expedited) in cents — must match the shipping policy text below.
+        "shipping": (695, 7500, 1495),
         "policies": [
             ("shipping", "Free standard shipping over $75; standard delivery takes 3–5 business days.",
              "Standard shipping is $6.95 under $75 and free over $75. Expedited 2-day shipping is $14.95. Orders placed before 1pm MT ship the same business day. We ship to the contiguous US only."),
@@ -60,6 +63,7 @@ SEED: dict[StoreId, dict] = {
     },
     StoreId.STORE_B: {
         "profile": ("Bloom & Brew", "care@bloomandbrew.example.com", "Every day 9am–8pm ET", "USD"),
+        "shipping": (499, 5000, None),
         "policies": [
             ("shipping", "Flat $4.99 shipping, free over $50; delivery in 2–4 business days.",
              "We charge a flat $4.99 for shipping, free on orders over $50. Most orders arrive in 2–4 business days. Fresh-roasted coffee ships within 48 hours of roasting."),
@@ -103,14 +107,29 @@ def seed_store(store: StoreId, url: str, reset: bool) -> None:
     data = SEED[store]
     with psycopg.connect(url) as conn, conn.transaction():
         if reset:
-            conn.execute("TRUNCATE order_items, orders, customers, products, policies, store_profile RESTART IDENTITY CASCADE")
+            conn.execute("TRUNCATE sandbox_payment_intents, payments, cart_items, carts, password_reset_tokens, sessions, "
+                         "order_items, orders, customers, products, policies, store_profile RESTART IDENTITY CASCADE")
+            conn.execute("ALTER SEQUENCE order_number_seq RESTART")
         elif conn.execute("SELECT count(*) FROM products").fetchone()[0] > 0:
-            print(f"{store.value}: already seeded (use --reset to reseed)")
+            # Non-destructive backfill for databases seeded before shipping prices existed (migration 0002).
+            filled = conn.execute(
+                "UPDATE store_profile SET standard_shipping_cents = %s, free_shipping_min_cents = %s, expedited_shipping_cents = %s "
+                "WHERE id = 1 AND standard_shipping_cents = 0",
+                list(data["shipping"]),
+            ).rowcount
+            translated = _fill_policy_translations(conn, store)
+            print(f"{store.value}: already seeded (use --reset to reseed){'; shipping prices backfilled' if filled else ''}"
+                  f"{f'; {translated} policy translations backfilled' if translated else ''}")
             return
 
-        conn.execute("INSERT INTO store_profile (id, name, support_email, support_hours, currency) VALUES (1, %s, %s, %s, %s)", data["profile"])
+        conn.execute(
+            "INSERT INTO store_profile (id, name, support_email, support_hours, currency, standard_shipping_cents, free_shipping_min_cents, expedited_shipping_cents) "
+            "VALUES (1, %s, %s, %s, %s, %s, %s, %s)",
+            [*data["profile"], *data["shipping"]],
+        )
         for topic, summary, details in data["policies"]:
             conn.execute("INSERT INTO policies (topic, summary, details) VALUES (%s, %s, %s)", [topic, summary, details])
+        _fill_policy_translations(conn, store)
 
         product_ids, prices = {}, {}
         for sku, slug, name, cat, desc, price, stock, emoji in data["products"]:
@@ -142,6 +161,18 @@ def seed_store(store: StoreId, url: str, reset: bool) -> None:
                     [oid, product_ids[sku], qty, prices[sku]],
                 )
     print(f"{store.value}: seeded {len(data['products'])} products, {len(data['customers'])} accounts, {len(data['orders'])} orders")
+
+
+def _fill_policy_translations(conn, store: StoreId) -> int:
+    """Non-destructive: only fills translations that are still empty."""
+    n = 0
+    for topic, langs in POLICY_TRANSLATIONS[store].items():
+        (sta, dta), (shi, dhi) = langs["ta"], langs["hi"]
+        n += conn.execute(
+            "UPDATE policies SET summary_ta = %s, details_ta = %s, summary_hi = %s, details_hi = %s WHERE topic = %s AND details_ta IS NULL",
+            [sta, dta, shi, dhi, topic],
+        ).rowcount
+    return n
 
 
 def seed_all(database_urls: dict[str, str], reset: bool = False) -> None:

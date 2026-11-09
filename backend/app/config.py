@@ -7,6 +7,7 @@ Validation errors name the offending variable but never echo its value.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -37,9 +38,10 @@ def _read_env_file(path: Path) -> dict[str, str]:
 @dataclass(frozen=True)
 class Settings:
     app_env: str
-    secret_key: str
+    # repr=False: secrets and credential-bearing URLs must never appear in logs or test tracebacks.
+    secret_key: str = field(repr=False)
     token_ttl_minutes: int
-    store_database_urls: dict[str, str]
+    store_database_urls: dict[str, str] = field(repr=False)
     llm_enabled: bool
     ollama_url: str
     ollama_model: str
@@ -49,6 +51,21 @@ class Settings:
     rate_limit_login_per_min: int
     rate_limit_default_per_min: int
     phone_number_store_map: dict[str, str] = field(default_factory=dict)
+    payment_provider: str = "sandbox"
+    password_reset_ttl_minutes: int = 30
+    email_delivery: str = "dev_outbox"  # dev_outbox | none
+    store_public_urls: dict[str, str] = field(default_factory=dict)
+    speech_stt: str = "none"            # none | whisper_cpp
+    whisper_cpp_bin: str = "whisper-cli"
+    whisper_model_path: str = ""
+    whisper_en_model_path: str = ""     # optional English-only model used when the language is English
+    speech_languages: tuple[str, ...] = ("ta", "en", "hi")
+    speech_default_language: str = "ta"  # Tamil by default
+    speech_language_detection: bool = True
+    speech_tts: str = "none"            # none | macos_say
+    tts_voice: str = "Samantha"
+    tts_voice_ta: str = "Vani"
+    tts_voice_hi: str = "Lekha"
 
 
 def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_ENV_FILE) -> Settings:
@@ -106,8 +123,59 @@ def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_EN
         else:
             phone_map[number.strip()] = store
 
+    # Only the sandbox provider exists. A real provider must be implemented, configured and
+    # explicitly authorised (PAYMENT_LIVE_AUTHORIZED=true) before it can be selected.
+    payment_provider = merged.get("PAYMENT_PROVIDER", "sandbox").strip().lower()
+    if payment_provider != "sandbox":
+        if merged.get("PAYMENT_LIVE_AUTHORIZED", "").lower() != "true":
+            errors.append("PAYMENT_PROVIDER other than 'sandbox' requires PAYMENT_LIVE_AUTHORIZED=true")
+        else:
+            errors.append("PAYMENT_PROVIDER: no live payment provider is implemented yet; use 'sandbox'")
+
+    app_env = get("APP_ENV", "development")
+    email_delivery = merged.get("EMAIL_DELIVERY", "dev_outbox" if app_env == "development" else "none").strip().lower()
+    if email_delivery not in ("dev_outbox", "none"):
+        errors.append("EMAIL_DELIVERY must be 'dev_outbox' or 'none'")
+
+    public_urls = {
+        "store-a": merged.get("STORE_A_PUBLIC_URL", "http://127.0.0.1:5180").rstrip("/"),
+        "store-b": merged.get("STORE_B_PUBLIC_URL", "http://127.0.0.1:5181").rstrip("/"),
+    }
+    for name, url in (("STORE_A_PUBLIC_URL", public_urls["store-a"]), ("STORE_B_PUBLIC_URL", public_urls["store-b"])):
+        if urlparse(url).scheme not in ("http", "https"):
+            errors.append(f"{name} must be an http(s) URL")
+
+    speech_stt = merged.get("SPEECH_STT", "none").strip().lower()
+    if speech_stt not in ("none", "whisper_cpp"):
+        errors.append("SPEECH_STT must be 'none' or 'whisper_cpp'")
+    whisper_model = merged.get("WHISPER_MODEL_PATH", "").strip()
+    if speech_stt == "whisper_cpp" and not (whisper_model and Path(whisper_model).expanduser().is_file()):
+        errors.append("WHISPER_MODEL_PATH must point to an existing ggml model file when SPEECH_STT=whisper_cpp")
+    whisper_en_model = merged.get("WHISPER_EN_MODEL_PATH", "").strip()
+    if whisper_en_model and not Path(whisper_en_model).expanduser().is_file():
+        errors.append("WHISPER_EN_MODEL_PATH must point to an existing ggml model file")
+    speech_languages = tuple(dict.fromkeys(c.strip().lower() for c in merged.get("SPEECH_LANGUAGES", "ta,en,hi").split(",") if c.strip()))
+    if not speech_languages or any(c not in ("ta", "en", "hi") for c in speech_languages):
+        errors.append("SPEECH_LANGUAGES must be a comma-separated subset of ta,en,hi")
+    speech_default_language = merged.get("SPEECH_DEFAULT_LANGUAGE", "ta").strip().lower()
+    if speech_default_language not in speech_languages:
+        errors.append("SPEECH_DEFAULT_LANGUAGE must be one of SPEECH_LANGUAGES")
+    detection = merged.get("SPEECH_LANGUAGE_DETECTION", "auto").strip().lower()
+    if detection not in ("auto", "off"):
+        errors.append("SPEECH_LANGUAGE_DETECTION must be 'auto' or 'off'")
+    speech_tts = merged.get("SPEECH_TTS", "none").strip().lower()
+    if speech_tts not in ("none", "macos_say"):
+        errors.append("SPEECH_TTS must be 'none' or 'macos_say'")
+    tts_voice = merged.get("TTS_VOICE", "Samantha").strip()
+    tts_voices = {name: merged.get(name, default).strip() for name, default in
+                  (("TTS_VOICE", "Samantha"), ("TTS_VOICE_TA", "Vani"), ("TTS_VOICE_HI", "Lekha"))}
+    for name, value in tts_voices.items():
+        if not re.fullmatch(r"[A-Za-z][A-Za-z ()\-]{0,39}", value):
+            errors.append(f"{name} must be a voice name such as Samantha")
+    tts_voice = tts_voices["TTS_VOICE"]
+
     settings = Settings(
-        app_env=get("APP_ENV", "development"),
+        app_env=app_env,
         secret_key=secret,
         token_ttl_minutes=get_int("TOKEN_TTL_MINUTES", "60"),
         store_database_urls=db_urls,
@@ -120,6 +188,21 @@ def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_EN
         rate_limit_login_per_min=get_int("RATE_LIMIT_LOGIN_PER_MIN", "10"),
         rate_limit_default_per_min=get_int("RATE_LIMIT_DEFAULT_PER_MIN", "120"),
         phone_number_store_map=phone_map,
+        payment_provider=payment_provider,
+        password_reset_ttl_minutes=get_int("PASSWORD_RESET_TTL_MINUTES", "30"),
+        email_delivery=email_delivery,
+        store_public_urls=public_urls,
+        speech_stt=speech_stt,
+        whisper_cpp_bin=merged.get("WHISPER_CPP_BIN", "whisper-cli").strip() or "whisper-cli",
+        whisper_model_path=str(Path(whisper_model).expanduser()) if whisper_model else "",
+        whisper_en_model_path=str(Path(whisper_en_model).expanduser()) if whisper_en_model else "",
+        speech_languages=speech_languages,
+        speech_default_language=speech_default_language,
+        speech_language_detection=detection == "auto",
+        speech_tts=speech_tts,
+        tts_voice=tts_voice,
+        tts_voice_ta=tts_voices["TTS_VOICE_TA"],
+        tts_voice_hi=tts_voices["TTS_VOICE_HI"],
     )
     if errors:
         raise ConfigError("Invalid configuration:\n  - " + "\n  - ".join(errors))
@@ -138,4 +221,4 @@ if __name__ == "__main__":
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         sys.exit(1)
-    print(f"Configuration OK (env={s.app_env}, llm_enabled={s.llm_enabled}, model={s.ollama_model})")
+    print(f"Configuration OK (env={s.app_env}, llm_enabled={s.llm_enabled}, model={s.ollama_model}, payments={s.payment_provider}, stt={s.speech_stt}, tts={s.speech_tts}, voice_default={s.speech_default_language})")

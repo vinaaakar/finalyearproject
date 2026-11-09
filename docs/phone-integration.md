@@ -48,3 +48,11 @@ caller ─▶ telephony provider ─▶ provider adapter (webhook) ─▶ CallMa
 
 Asterisk or FreeSWITCH with a softphone can run entirely locally. Use AGI/ARI or a mod_audio_stream
 bridge that turns speech into text and posts turns to the same `CallManager`.
+
+## Speech for a future real phone channel
+
+Local engines now exist behind the same adapters (see `docs/voice.md`): whisper.cpp for
+speech-to-text and macOS `say` for text-to-speech. A SIP gateway or media-stream provider
+could send caller audio to `WhisperCppSTT` and play `MacSayTTS` output, instead of relying on the provider's
+own speech services. This is still **not connected to any telephone network**. Every phone
+response remains `"simulated": true` until a real provider adapter is written, configured and authorised.

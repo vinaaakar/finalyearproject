@@ -103,12 +103,16 @@ def test_llm_receives_only_current_store_context(settings):
     assert "Bloom" not in sent and "BB-" not in sent and "gooseneck" not in sent.lower()
 
 
-def test_llm_never_receives_orders_without_login(settings):
+def test_llm_is_never_called_for_order_questions(settings):
+    # Order answers involve private data, so they are always the deterministic reply: the model
+    # is not called at all, signed in or not.
     fake = FakeLLM()
     with make_client(settings, llm=fake) as c:
-        chat(c, "store-a", "where is order SA-10001")
-    sent = json.dumps(fake.calls[0])
-    assert "1ZDEMO" not in sent and "login_required" in sent
+        guest = chat(c, "store-a", "where is order SA-10001")
+        signed_in = chat(c, "store-a", "where is order SA-10001", login(c, "store-a", ALEX, PW_A))
+    assert fake.calls == []
+    assert guest["source"] == signed_in["source"] == "rules"
+    assert "sign in" in guest["reply"].lower() and "1ZDEMO" in signed_in["reply"]
 
 
 def test_llm_failure_falls_back_to_rules(settings):
@@ -120,3 +124,7 @@ def test_llm_failure_falls_back_to_rules(settings):
 def test_weak_partial_matches_are_dropped(client):
     names = [p["name"] for p in chat(client, "store-a", "is the rain jacket in stock?")["products"]]
     assert names == ["Stormshell Rain Jacket"]
+
+
+def test_no_double_period_after_store_name(client):
+    assert ".." not in chat(client, "store-a", "do you sell espresso machines?")["reply"]

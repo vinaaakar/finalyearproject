@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from app.config import load_settings
 from app.main import create_app
 from app.migrate import migrate_database
+from app.notify import MemorySender
 from app.ratelimit import limiter
 from app.seed import AGENT_PASSWORD, DEMO_PASSWORDS, seed_store
 from app.stores import StoreId
@@ -26,7 +27,8 @@ def _to_test_db(url: str) -> str:
 def settings():
     base = load_settings()
     urls = {k: _to_test_db(v) for k, v in base.store_database_urls.items()}
-    return dataclasses.replace(base, store_database_urls=urls, llm_enabled=False)
+    # Speech engines are pinned off so results don't depend on the local .env; tests that need an engine install one.
+    return dataclasses.replace(base, store_database_urls=urls, llm_enabled=False, speech_stt="none", speech_tts="none")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -45,8 +47,8 @@ def _reset_rate_limits():
     limiter.reset()
 
 
-def make_client(settings, llm=False, **overrides) -> TestClient:
-    app = create_app(dataclasses.replace(settings, **overrides) if overrides else settings, llm=llm)
+def make_client(settings, llm=False, mailer=None, **overrides) -> TestClient:
+    app = create_app(dataclasses.replace(settings, **overrides) if overrides else settings, llm=llm, mailer=mailer or MemorySender())
     return TestClient(app)
 
 
@@ -71,3 +73,39 @@ AGENT_B = "agent@bloomandbrew.example.com"
 PW_A = DEMO_PASSWORDS[StoreId.STORE_A]
 PW_B = DEMO_PASSWORDS[StoreId.STORE_B]
 PW_AGENT = AGENT_PASSWORD
+
+
+# ---- helpers for commerce tests ---------------------------------------------------------------
+import itertools
+import uuid
+
+import psycopg
+
+_seq = itertools.count()
+STRONG_PW = "Correct-Horse-42"
+
+
+def db_exec(settings, store: str, sql: str, params=None):
+    """Direct SQL against a *test* store database (for arranging stock, inspecting rows)."""
+    with psycopg.connect(settings.store_database_urls[store]) as conn:
+        cur = conn.execute(sql, params or [])
+        return cur.fetchall() if cur.description else cur.rowcount
+
+
+def set_stock(settings, store: str, slug: str, qty: int) -> None:
+    db_exec(settings, store, "UPDATE products SET stock_qty = %s WHERE slug = %s", [qty, slug])
+
+
+def new_customer(client: TestClient, store: str, name: str = "Test Shopper") -> tuple[dict[str, str], str]:
+    email = f"shopper{next(_seq)}-{uuid.uuid4().hex[:6]}@example.com"
+    r = client.post(f"/api/stores/{store}/auth/register", json={"email": email, "full_name": name, "password": STRONG_PW})
+    assert r.status_code == 201, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}, email
+
+
+def idem() -> dict[str, str]:
+    return {"Idempotency-Key": uuid.uuid4().hex}
+
+
+ADDRESS_A = {"full_name": "Test Shopper", "line1": "1 Trail Way", "city": "Boulder", "region": "CO", "postal_code": "80302"}
+ADDRESS_B = {"full_name": "Test Shopper", "line1": "2 Brew St", "city": "Chicago", "region": "IL", "postal_code": "60614"}

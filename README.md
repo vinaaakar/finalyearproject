@@ -1,9 +1,11 @@
 # AI Voice Commerce — Inclusive Customer Service for Two Stores
 
 Two independent e-commerce storefronts served by **one central AI customer-service assistant**.
-Customers can browse products, sign in, view orders, and ask the assistant — by typing or by
-speaking — about products, prices, stock, shipping, returns and order status. Each store has its
-own database; the assistant never mixes their data.
+Customers can browse, add to a cart, check out, pay (sandbox), manage an account, and ask the assistant —
+by typing or by speaking — about products, prices, stock, shipping, returns, their cart and order status.
+Each store has its own database; nothing is shared between them. The assistant speaks **Tamil (default),
+English and Hindi**: it identifies the language of every message from the customer's own words and replies, in
+text and speech, in that language (see docs/voice.md).
 
 | | Store A | Store B |
 |---|---|---|
@@ -11,9 +13,11 @@ own database; the assistant never mixes their data.
 | Assistant | Scout | Maple |
 | Storefront | http://127.0.0.1:5180 | http://127.0.0.1:5181 |
 | Database | `store_a` (role `store_a_app`) | `store_b` (role `store_b_app`) |
-| Order numbers | `SA-xxxxx` | `BB-xxxxx` |
+| Order numbers | `SA-xxxxx` | `BB-xxxxx` (new orders start at 50001) |
+| Shipping | $6.95, free over $75, expedited $14.95; contiguous US only | $4.99, free over $50 |
 
-All data is **synthetic** (fictional people, `example.com` emails).
+All data is **synthetic** (fictional people, `example.com` emails). **Payments are sandbox-only**:
+no real money moves and no card details are collected anywhere.
 
 ---
 
@@ -29,8 +33,10 @@ scripts/test.sh      # backend tests + storefront production builds
 scripts/stop.sh      # stop app processes (add --db to also stop the Postgres container; data is kept)
 ```
 
+After pulling new code, apply migrations without touching existing data:
+`cd backend && .venv/bin/python -m app.migrate && .venv/bin/python -m app.seed` (the seed step only backfills new settings when data exists).
+
 If Ollama is not running, the assistant automatically uses deterministic rule-based replies.
-Start Ollama with `ollama serve` (or open the Ollama app); no restart of the API is needed.
 
 ### Demo accounts (synthetic)
 
@@ -42,6 +48,9 @@ Start Ollama with `ollama serve` (or open the Ollama app); no restart of the API
 | B | `maria.gomez@example.com` | `BrewDemo!2026` | customer (orders BB-20001, BB-20004) |
 | B | `alex.rivera@example.com` | `BrewDemo!2026` | customer — a *separate* account from Store A's Alex |
 | B | `agent@bloomandbrew.example.com` | `AgentDemo!2026` | staff agent |
+
+You can also create accounts at `/register` (per store). Password reset emails are not sent; in
+development they are written to `.run/outbox/` (git-ignored, owner-only files).
 
 Phone-verification ZIP codes: SA-10001 → `80302`, BB-20001 → `60614` (see `backend/app/seed.py`).
 
@@ -55,17 +64,20 @@ Phone-verification ZIP codes: SA-10001 → `80302`, BB-20001 → `60614` (see `b
         └──────────────┬──────────────────┘
                        ▼
           Central FastAPI backend (:8000)
-   ┌───────────────────────────────────────────────┐
-   │ store id validated (enum) → auth token must    │
-   │ match store → role check → rate limit           │
-   │                                                 │
-   │ Assistant: intent rules → controlled repo calls │
-   │   → context (this store + this customer only)   │
-   │   → Ollama llama3.2:3b phrases reply            │
-   │   → fallback: deterministic reply               │
-   │ Phone: provider interface + call state machine  │
-   │ Speech: adapter slots (browser STT/TTS today)   │
-   └──────────┬───────────────────────┬──────────────┘
+   ┌──────────────────────────────────────────────────────┐
+   │ store id validated (enum) → token must match store    │
+   │ AND a live server-side session → role → rate limit     │
+   │                                                        │
+   │ Commerce (commerce.py): cart, checkout transaction,    │
+   │   order/payment state machine (order_state.py)         │
+   │ Payments (payments/): provider interface + SANDBOX     │
+   │ Accounts: register, sessions, sign-out, password reset │
+   │ Assistant: intent rules → controlled repo calls        │
+   │   → private answers deterministic; others phrased by   │
+   │   Ollama llama3.2:3b → grounding check → fallback       │
+   │ Speech: browser STT/TTS, or local whisper.cpp / `say`  │
+   │ Phone: provider interface + call state machine (sim)   │
+   └──────────┬───────────────────────┬────────────────────┘
               ▼                       ▼
      Postgres db store_a       Postgres db store_b      (container avc_postgres, 127.0.0.1:5433)
      role store_a_app only     role store_b_app only
@@ -75,9 +87,13 @@ Project layout:
 
 ```
 backend/            FastAPI app (app/), SQL migrations, tests, venv (.venv, git-ignored)
+  app/commerce.py   cart, checkout, payment flows (all SQL for these lives here)
+  app/order_state.py order + payment state machines
+  app/payments/     provider interface (base.py) + sandbox provider
   app/assistant/    intent rules, Ollama client, assistant service
   app/phone/        provider interface, call state machine, simulator
-  app/speech/       server-side speech adapter slots
+  app/speech/       speech adapters (whisper.cpp STT, macOS say TTS)
+  app/notify.py     email adapters (dev outbox only)
 frontend/           npm workspace (one shared node_modules)
   packages/shared/  shared React UI: pages, chat widget, voice adapters, API client, styles
   apps/store-a/     Summit Trail Co. branding + config
@@ -90,115 +106,179 @@ docs/               voice and phone integration notes
 ## Security model
 
 - **Physical isolation**: each store has its own database *and* its own Postgres role; `CONNECT`
-  is revoked from `PUBLIC`, so Store A's role cannot even open Store B's database (tested).
-- **Store-bound sessions**: login tokens are HMAC-signed and contain the store id. A Store A token
-  sent to any Store B endpoint gets `403`. Tampering with the token gets `401`.
-- **Order privacy**: order details are returned only to the signed-in owner, or to a staff agent of
-  the same store. Unknown and other people's orders both return the same `404`. Login failure messages
-  do not reveal whether an email exists (and timing is equalised).
-- **The LLM never touches the database.** The backend decides intents with deterministic rules and
-  fetches data through fixed, parameterised functions in `app/repositories.py`. The model only receives
-  the current store's data and the current customer's own orders, so prompt injection cannot extract
-  other data. Guests asking about orders get a sign-in prompt; no order data is sent to the model.
-- **Input validation** (Pydantic) with length limits; validation errors never echo submitted values.
-- **Rate limiting** per client IP: login 10/min, chat 30/min, everything else 120/min (configurable).
-- **Errors** are uniform JSON (`{"error": {"code", "message"}}`) with no stack traces.
-- **Logs** contain method, path, status, duration and request id only; a redaction filter strips
-  bearer tokens, passwords and database credentials.
+  is revoked from `PUBLIC`, so Store A's role cannot even open Store B's database (tested). Carts,
+  orders, payments, sessions and reset tokens live in the store's own database, so a Store A cart
+  token, order or payment reference cannot even be addressed from Store B.
+- **Sessions**: login/registration create a server-side session row (only a SHA-256 of its id is
+  stored). Access tokens are HMAC-signed, carry the store id and the session id, and are accepted only
+  while that session is live. Sign-out revokes it; a password reset revokes all of the customer's sessions.
+  A Store A token on any Store B endpoint gets `403`; a tampered or session-less token gets `401`.
+- **Accounts**: scrypt password hashes; minimum 10 characters plus a common-password check; emails unique
+  per store (case-insensitive); registration can never create a staff account (unknown fields are rejected).
+  Password-reset requests answer identically whether or not the email exists. Reset tokens are random,
+  stored hashed, expire after 30 minutes, are single-use and store-scoped, and are sent in the URL *fragment*
+  so they never reach server logs or Referer headers.
+- **Cart & checkout**: the cart stores only product ids and quantities. Every price, subtotal, shipping
+  charge and total is computed on the server from the database. Checkout locks the product rows,
+  re-checks stock and prices, and creates the order, its items and the stock decrement in **one transaction**.
+  It requires an `Idempotency-Key`: repeated or concurrent submissions return the original order (tested with
+  4 parallel submissions). If the total changed since the customer reviewed it, checkout stops with `409`.
+  Addresses are validated on the server (US state, ZIP format; Store A refuses AK/HI).
+- **Payments**: provider interface plus a **sandbox** provider. The order moves to "processing" only
+  after the server asks the provider for the status and the amount and currency match the order;
+  the verify endpoint takes no status from the client. No card fields exist anywhere (unknown fields are
+  rejected). Selecting any non-sandbox provider is refused unless `PAYMENT_LIVE_AUTHORIZED=true`,
+  and no live provider is implemented.
+- **Order privacy**: order details only for the signed-in owner, or a staff agent of the same store.
+  Unknown orders and other people's orders return the same `404`.
+- **The LLM never touches the database.** The backend picks intents with rules and fetches data through
+  fixed, parameterised functions. Answers about **orders and carts are always deterministic**: the model
+  is not called. Other model replies are checked against the verified context (dollar amounts, order
+  numbers, the other store's name or assistant) and replaced with the rule-based answer if they fail.
+  Identity comes only from the session or the shopper's own cart token, never from message text
+  (claimed roles, fake JSON and forged chat history are tested).
+- **Input validation** (Pydantic, unknown fields forbidden on commerce/account bodies); errors never echo values.
+- **Rate limiting** per client IP: login 10/min, account actions (register/reset) 10/min, chat and speech
+  30/min, everything else 120/min.
+- **Logs and errors** contain no tokens, passwords, credentials, audio or email bodies. `Settings`
+  hides the secret key and database URLs from `repr`, so they don't appear in tracebacks.
 - **Phone callers** must give both the order number and the shipping ZIP; 3 failures end the call.
 
-## Voice (Milestone 3)
+## Customer care
 
-- 🎤 button in the chat widget uses the browser's **Web Speech API** (Chrome, Edge, Safari).
-  Interim text appears live; the final transcript is sent as a chat message and the reply is spoken.
-- Replies are spoken with **`speechSynthesis`**, which runs locally using the OS voices.
-  "Read replies aloud" makes typed questions spoken too.
-- Microphone denial, missing microphones, unsupported browsers and non-secure pages show a clear
-  message, and typing always keeps working.
-- **Privacy note:** Chrome/Edge send microphone audio to the browser vendor's cloud speech service.
-  This is disclosed in the widget. A fully local option (whisper.cpp / faster-whisper behind the
-  `app/speech` adapter) is documented in `docs/voice.md` but **not installed**, to avoid a large download.
+Scout and Maple handle deliveries, cancellations, payments, refunds, returns, damaged or wrong items, accounts,
+checkout help, product comparison and alternatives, promotions, invoices, privacy, accessibility and requests for a
+person, in Tamil, English and Hindi, typed or spoken. Customer-specific answers come only from the signed-in
+customer's own records. The assistant can propose **actions** (links, *Add to cart*, *Cancel order* for unpaid
+orders with a second confirmation); the existing APIs perform and validate them, and the chat confirms only after
+they succeed. Capabilities the system doesn't have (refunds, returns, edits, tickets, live agents…) are explained
+honestly with the store's support contact. Details: **docs/customer-care.md**.
 
-## Phone (Milestone 4)
+## Voice and languages
 
-A provider-independent interface (`app/phone/base.py`) plus a shared call state machine
-(`app/phone/session.py`). Only a **text-based simulator** exists today; every simulator response
-contains `"simulated": true` and a `SIMULATION ONLY` notice. **No real phone calls are possible yet.**
-See `docs/phone-integration.md` for what a real provider (Twilio, a SIP gateway, …) needs.
+See **docs/voice.md** for details and measured results. In short:
+- **Tamil is the default**: the chat widget opens in Tamil (welcome, chips, prompts, selector). Only Tamil, English
+  and Hindi are offered.
+- **Per-utterance language identification**: local whisper.cpp language detection (multilingual model), combined
+  with text evidence (script, romanized Tamil/Hindi words). The acoustic result is accepted only in a receipt signed by
+  the server. Uncertain or unsupported → a clarification with தமிழ் / English / हिन्दी buttons, never a guess.
+  Language-neutral messages use the conversation language and are labelled as not detected.
+- **Replies in the same language**: Tamil and Hindi come from reviewed templates and translated store policies, with
+  facts inserted verbatim. English may be phrased by the LLM, with language and grounding enforced on the server.
+- **Speech in the same language**: local macOS voices Vani (ta-IN), Lekha (hi-IN), Rishi (en-IN) in the browser. Remote
+  voices are never used. Fallback: server `say`, then text only with a notice.
+- Audio stays on this Mac when local STT is enabled. Without it, the browser's Web Speech API listens in one fixed
+  locale (it cannot detect language) and Chrome sends that audio to Google. The widget says which mode is active.
+- Local speech is **off by default**; see docs/voice.md for the `.env` lines. A multilingual model is required for Tamil/Hindi.
 
-```bash
-curl -s -X POST localhost:8000/api/phone/simulator/store-a/calls
-curl -s -X POST localhost:8000/api/phone/simulator/calls/<call_id>/turns -H 'Content-Type: application/json' -d '{"speech":"where is my order SA-10001"}'
-curl -s -X POST localhost:8000/api/phone/simulator/calls/<call_id>/turns -H 'Content-Type: application/json' -d '{"digits":"80302"}'
-```
+## Phone
+
+A provider-independent interface plus a call state machine. Only a **text-based simulator** exists; every
+response contains `"simulated": true` and a `SIMULATION ONLY` notice. **No real phone calls are possible.**
+See `docs/phone-integration.md`.
 
 ## API overview
 
-Interactive docs: http://127.0.0.1:8000/docs
+Interactive docs: http://127.0.0.1:8000/docs. `{store}` is `store-a` or `store-b`; anything else gets `422`.
 
 | Method | Path | Auth |
 |---|---|---|
 | GET | `/api/health` | — |
 | GET | `/api/stores/{store}` · `/categories` · `/products?q=&category=` · `/products/{slug}` | — |
-| POST | `/api/stores/{store}/auth/login` | — |
+| POST | `/api/stores/{store}/auth/login` · `/auth/register` | — |
+| POST | `/api/stores/{store}/auth/logout` | signed in |
+| POST | `/api/stores/{store}/auth/password-reset/request` · `/auth/password-reset/confirm` | — |
 | GET | `/api/stores/{store}/me` · `/orders` · `/orders/{order_number}` | customer or agent |
 | GET | `/api/stores/{store}/admin/orders` | agent |
-| POST | `/api/stores/{store}/chat` | optional (needed for order status) |
+| GET | `/api/stores/{store}/cart` | guest (`X-Cart-Token`) or customer |
+| POST/PUT/DELETE | `/api/stores/{store}/cart/items` · `/cart/items/{slug}` | guest or customer |
+| POST | `/api/stores/{store}/cart/merge` | customer (+ guest `X-Cart-Token`) |
+| POST | `/api/stores/{store}/checkout/quote` | customer |
+| POST | `/api/stores/{store}/checkout` (header `Idempotency-Key`) | customer |
+| POST | `/api/stores/{store}/orders/{n}/cancel` · `/orders/{n}/payments` · `/orders/{n}/payments/verify` | customer (owner) |
+| GET | `/api/stores/{store}/orders/{n}/payment` | customer (owner) |
+| POST | `/api/stores/{store}/payments/sandbox/{ref}/complete` | customer (owner), sandbox only |
+| POST | `/api/stores/{store}/chat` (`conversation_language`, `speech_receipt`, `language_override`) | optional (needed for orders; cart via session or `X-Cart-Token`) |
 | GET | `/api/speech/capabilities` | — |
+| POST | `/api/stores/{store}/speech/transcribe?language=auto` (WAV body) · `/api/speech/synthesize` (`{text, language}`) | — (rate-limited) |
 | POST | `/api/phone/simulator/{store}/calls` · `/api/phone/simulator/calls/{id}/turns` | — (simulation) |
-
-`{store}` is `store-a` or `store-b`; anything else is rejected with `422`.
 
 ## Configuration
 
 `.env` (created by `scripts/setup.sh`, permissions `600`, git-ignored). See `.env.example` for every
-variable. `python -m app.config` (run from `backend/`) validates it; `start.sh` does this automatically.
-Invalid values are reported by variable name only — values are never printed.
+variable, including `PAYMENT_PROVIDER`, `EMAIL_DELIVERY`, `STORE_*_PUBLIC_URL`, `SPEECH_STT`,
+`WHISPER_MODEL_PATH`, `SPEECH_TTS`. `python -m app.config` (from `backend/`) validates it; `start.sh` runs it.
 
 Database changes: add `backend/migrations/000N_description.sql`, then `python -m app.migrate`.
-Reseed demo data: `python -m app.seed --reset`.
+Reseed demo data (destructive): `python -m app.seed --reset`.
 
 ## Testing
 
-`scripts/test.sh` runs **59 backend tests** against separate `store_a_test` / `store_b_test` databases
-(never the dev data), then builds both storefronts. Coverage includes:
-cross-store isolation at API, assistant, phone and database-role level; auth and roles; the assistant
-with a fake LLM (context contains only the current store); LLM-failure fallback; prompt-injection
-attempts; validation; rate limits; config validation; token tampering/expiry; log redaction; phone flows.
+`scripts/test.sh` runs **217 backend tests** against separate `store_a_test` / `store_b_test` databases
+(never the dev data), then builds both storefronts. Coverage added since the first version:
+cart pricing and stock rules, guest-cart merge, checkout transaction, idempotency (including concurrent
+submissions), price/stock re-checks, address validation, sandbox payments (approve, decline + retry,
+amount mismatch, client claims ignored, cancelled orders), order state machine, registration, sign-out
+revocation, password reset (single-use, expiry, store-scoped, no account enumeration), assistant grounding,
+private answers never sent to the model, claimed identities and forged history, cross-store tokens for
+chat/cart/payments, and speech endpoints. Key protections were mutation-checked: disabling them makes tests fail.
+
+Multilingual tests (`tests/test_multilingual.py`, `tests/test_speech_languages.py`) cover Tamil default, per-utterance
+identification, ta→en→hi→ta switching, the selector not acting as evidence, neutral/uncertain fallbacks, receipt
+forgery, security in all three languages, identical facts across languages, and LLM language enforcement.
+
+The real-engine speech tests run when `AVC_TEST_WHISPER_MODEL=/path/to/ggml-base.en.bin` and
+`AVC_TEST_WHISPER_MULTI_MODEL=/path/to/ggml-base.bin` are set; otherwise they are skipped.
+
+Browser end-to-end checks were run in headless Chrome (driven over the DevTools protocol) against an
+isolated stack on the test databases: guest cart → sign-in merge → checkout → double-clicked "Place order"
+(one order created) → declined then approved sandbox payment → order processing → assistant reports it →
+sign-out revokes the token; registration and password reset via the outbox link; HI address refused; 390 px layouts;
+and the local voice loop using Chrome's fake microphone device.
 
 ## What works vs. what doesn't
 
 **Working and verified**
-- Both storefronts: catalog, search, category filter, product detail, sign-in, order list, staff order list;
-  responsive at desktop and 390 px phone width (rendered in headless Chrome).
-- Central assistant with live `llama3.2:3b` (≈1–2 s per reply on this Mac) and automatic rule-based fallback.
-- Secure order-status lookup in chat; cross-store isolation; rate limiting; error handling.
+- Both storefronts: catalog, search, product detail, **cart, checkout, sandbox payment, registration,
+  sign-in/out, password reset**; responsive at 390 px, 768 px and desktop (rendered in headless Chrome).
+- Central assistant with live `llama3.2:3b` and rule-based fallback; budget-aware recommendations;
+  cart and order answers; grounding check (live: an injection asking about the other store fell back to rules).
+- Cross-store isolation for accounts, sessions, carts, orders, payments, assistant and phone.
+- Local voice: whisper.cpp STT and macOS `say` TTS, end-to-end in Chrome with a fake mic device.
 - Phone call flow in simulation.
 
-**Implemented but not verified by an automated or manual test here**
-- Microphone input and spoken replies in a real browser. The code builds, but nobody has clicked the
-  🎤 button with a real microphone yet. Please try it in Chrome or Safari.
-- Chat widget interactions in the browser (the API it calls is fully tested; the UI was not click-tested).
+- Tamil/English/Hindi chat with automatic per-utterance language identification and matching speech
+  (engine-level tests with macOS voices; browser tests with injected audio fixtures and Chrome's fake microphone).
+
+**Implemented but not verified by a person**
+- A **physical microphone** with a real voice (any language, including Indian-accented speech), and the
+  browser-vendor Web Speech recognizer (in headless Chrome it returned no result). Please press 🎤 in Chrome or Safari.
+- Short Tamil utterances can be heard as Telugu by `ggml-base`, which leads to a clarification. A larger model would help (not downloaded).
 
 **Not implemented**
-- Cart, checkout, payments, account registration and password reset.
-- A local server-side speech engine (only the adapter slot exists).
-- A real telephony provider (needs an account and credentials, or a local SIP setup).
-- Shared rate-limit storage for multi-instance deployments (the current limiter is in-memory).
-- HTTPS and production hosting configuration.
+- A real payment provider (needs an account, keys and your explicit authorisation).
+- Sending real email (password reset uses the dev outbox).
+- Expiry of unpaid orders (pending orders keep their reserved stock until paid or cancelled).
+- Refund flow for a payment that succeeds after an order was cancelled (logged as a warning only).
+- Staff tools to move orders to shipped/delivered (the state machine supports it; no endpoint yet).
+- A real telephony provider; HTTPS and production hosting; shared rate-limit storage for multiple instances.
+- Tokens are kept in `sessionStorage` (bearer tokens, revocable server-side). An httpOnly-cookie session with
+  CSRF protection would be stronger against XSS for production.
 
 ## Storage notes
 
-The app adds about **270 MB** locally: venv ~67 MB, node_modules ~44 MB, plus the Postgres volume.
-It reuses the existing `postgres:15-alpine` image and the existing `llama3.2:3b` model; nothing large
-was downloaded. `scripts/backup_to_drive.sh` (run it manually) writes a source + database-dump archive,
-**excluding `.env`**, to `My Drive/AI-Voice-Commerce/project-backups` with a SHA-256 checksum.
-Active code, the venv and the database stay on the local disk.
+The app adds about **270 MB** locally (venv ~67 MB, node_modules ~44 MB, plus the Postgres volume).
+No models were downloaded: local STT reuses the existing `whisper-cli` and the `ggml-base.en.bin` model in
+`~/.baymax/models` (read-only). **The disk had only about 2 GB free** during this work, so free some space before
+downloading anything larger. `scripts/backup_to_drive.sh` (run manually) writes a source + database-dump
+archive, **excluding `.env`**, to `My Drive/AI-Voice-Commerce/project-backups`.
 
 ## Troubleshooting
 
-- `python3` crashes on this Mac (the python.org 3.13 build that's first on PATH). The scripts
-  automatically use `/opt/homebrew/bin/python3`; override with `PYTHON=/path/to/python3`.
-- Port 5432 is used by another project's Postgres; this project uses **5433**. Port 5173 is also busy,
-  so the storefronts use **5180/5181**.
-- Assistant replies tagged "quick answer" mean the rule-based fallback was used (Ollama is off or slow).
+- `python3` crashes on this Mac (the python.org 3.13 build first on PATH). Scripts use `/opt/homebrew/bin/python3`;
+  override with `PYTHON=/path/to/python3`.
+- Port 5432 is used by another project's Postgres; this project uses **5433**. Port 5173 is busy, so the
+  storefronts use **5180/5181**.
+- Replies tagged "quick answer" came from the deterministic path: order/cart answers always do,
+  and other answers do when Ollama is off or a model reply failed the grounding check.
+- After this update, sign in again: tokens issued before sessions existed are rejected.

@@ -1,20 +1,21 @@
-/* Summit Trail Co. — forest green + trail orange, sturdy sans-serif. */
+/* Summit Trail Co. — premium outdoor: deep forest green, moss and stone, with a trail-orange accent. */
 :root {
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display: "Avenir Next Condensed", "Arial Narrow", system-ui, sans-serif;
-  --radius: 6px;
+  --font-display: "Avenir Next Condensed", "Avenir Next", "Arial Narrow", system-ui, sans-serif;
+  --radius: 8px;
   --brand: #1f4d3a;
   --on-brand: #ffffff;
   --accent: #c2410c;
   --on-accent: #ffffff;
+  --price: #1f4d3a;
   --focus: #f59e0b;
-  --bg: #f4f6f2;
+  --bg: #f3f5f0;
   --surface: #ffffff;
   --surface-2: #e6ece3;
   --text: #17231c;
   --muted: #55645a;
-  --border: #cfd8cc;
-  --hero-bg: linear-gradient(135deg, #1f4d3a 0%, #2f6b4f 60%, #4d7c5a 100%);
+  --border: #d3dccf;
+  --hero-bg: linear-gradient(135deg, #17382a 0%, #1f4d3a 55%, #2f6b4f 100%);
   --hero-text: #ffffff;
   --ok: #166534; --ok-bg: #dcfce7;
   --warn: #92400e; --warn-bg: #fef3c7;
@@ -24,7 +25,8 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1612; --surface: #17211b; --surface-2: #1f2b24; --text: #e7efe9; --muted: #a3b3a8; --border: #2e3d34;
-    --brand: #2f6b4f; --accent: #ea580c; --link: #86d3a8;
+    --brand: #234f3c; --accent: #ea580c; --link: #86d3a8; --price: #a7e3c0;
+    --hero-bg: linear-gradient(135deg, #0f241b 0%, #17382a 60%, #1f4d3a 100%);
     --ok: #86efac; --ok-bg: #14532d; --warn: #fcd34d; --warn-bg: #4a3410; --err: #fca5a5; --err-bg: #4c1414; --info: #93c5fd; --info-bg: #1e2f5c;
   }
 }

@@ -104,7 +104,8 @@ class CallManager:
                 return OutboundTurn(s.call_id, "Sure. To verify it's you, please say or key in the five-digit shipping ZIP code for that order.")
             s.state = "await_order_number"
             return OutboundTurn(s.call_id, f"Sure. Please say or key in your order number. It starts with {ORDER_PREFIX[s.store]}")
-        result = self.assistant.answer(s.store, text, principal=None)
+        # The phone simulator is English-only for now.
+        result = self.assistant.answer(s.store, text, principal=None, conversation_language="en")
         return OutboundTurn(s.call_id, result.reply)
 
     def _end(self, s: CallSession, say: str) -> OutboundTurn:

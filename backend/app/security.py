@@ -36,6 +36,16 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(digest.hex(), digest_hex)
 
 
+def new_opaque_token() -> str:
+    """Random bearer value for sessions, guest carts and password resets."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_opaque_token(token: str) -> str:
+    """Opaque tokens are stored only as SHA-256 hashes, so a database leak does not reveal usable tokens."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 # Used to equalise timing when the email does not exist.
 DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(16))
 
@@ -46,6 +56,8 @@ class Principal:
     store: StoreId
     role: str  # "customer" | "agent"
     name: str
+    # Random id of the server-side session row this token belongs to (see repositories.create_session).
+    session_id: str = ""
 
 
 class TokenError(Exception):
@@ -67,6 +79,7 @@ def issue_token(principal: Principal, secret: str, ttl_minutes: int) -> str:
         "store": principal.store.value,
         "role": principal.role,
         "name": principal.name,
+        "sid": principal.session_id,
         "iat": now,
         "exp": now + ttl_minutes * 60,
     }
@@ -92,6 +105,7 @@ def decode_token(token: str, secret: str) -> Principal:
             store=StoreId(payload["store"]),
             role=payload["role"],
             name=str(payload.get("name", "")),
+            session_id=str(payload.get("sid", "")),
         )
     except TokenError:
         raise

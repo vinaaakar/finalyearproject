@@ -1,20 +1,23 @@
-/* Bloom & Brew — warm terracotta + cream, serif display type, softer corners. */
+/* Bloom & Brew — premium café: espresso brown and cream, caramel accent, serif display type, softer corners. */
 :root {
-  --font-body: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --font-display: "Didot", "Bodoni 72", Georgia, serif;
+  --font-body: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --radius: 14px;
-  --brand: #7c2d12;
-  --on-brand: #fff7ed;
-  --accent: #9a3412;
-  --on-accent: #fff7ed;
+  --brand: #3b2418;
+  --on-brand: #fbf5ec;
+  --accent: #8a4f1d;
+  --on-accent: #fffaf3;
+  --price: #6b4226;
+  --font-price: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; /* prices in the display serif */
+  --price-weight: 700;
   --focus: #2563eb;
-  --bg: #fdf8f1;
+  --bg: #faf5ee;
   --surface: #fffdf9;
-  --surface-2: #f6ebdc;
+  --surface-2: #f2e6d6;
   --text: #2b1a12;
   --muted: #6f5848;
-  --border: #e8d6c1;
-  --hero-bg: radial-gradient(circle at 80% 20%, #fde3c8 0%, #f6ebdc 45%, #f0dcc4 100%);
+  --border: #e6d5c0;
+  --hero-bg: linear-gradient(135deg, #f6ecdf 0%, #ecdcc7 100%);
   --hero-text: #2b1a12;
   --ok: #166534; --ok-bg: #dcfce7;
   --warn: #92400e; --warn-bg: #fef3c7;
@@ -24,8 +27,8 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1a120e; --surface: #241812; --surface-2: #2f2018; --text: #f6ebdc; --muted: #c4ab96; --border: #4a3324;
-    --hero-bg: radial-gradient(circle at 80% 20%, #4a2a18 0%, #2f2018 60%); --hero-text: #f6ebdc;
-    --brand: #9a3412; --accent: #c2410c; --link: #fdba74;
+    --hero-bg: linear-gradient(135deg, #2f2018 0%, #3b2418 100%); --hero-text: #f6ebdc;
+    --brand: #4a2c1d; --accent: #c98b5e; --on-accent: #1a120e; --link: #e8b98a; --price: #e8b98a;
     --ok: #86efac; --ok-bg: #14532d; --warn: #fcd34d; --warn-bg: #4a3410; --err: #fca5a5; --err-bg: #4c1414; --info: #93c5fd; --info-bg: #1e2f5c;
   }
 }
