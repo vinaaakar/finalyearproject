@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 
-from ..deps import StorePath, rate_limit
+from ..deps import StorePath, client_key, rate_limit
 from ..phone.simulator import SimulatorProvider
 from ..schemas import PhoneTurnRequest, SynthesizeRequest
 from ..speech.adapters import MAX_AUDIO_BYTES, SpeechError, capabilities
@@ -73,12 +73,21 @@ async def synthesize(body: SynthesizeRequest, request: Request):
     return Response(content=audio, media_type=mime, headers={"Cache-Control": "no-store"})
 
 
-@router.post("/api/phone/simulator/{store_id}/calls")
+def _simulator_enabled(request: Request) -> None:
+    # The simulator answers unauthenticated callers, so outside development it does not exist unless explicitly enabled.
+    if not request.app.state.settings.phone_simulator_enabled:
+        raise HTTPException(404, "Not Found")
+
+
+@router.post("/api/phone/simulator/{store_id}/calls", dependencies=[Depends(_simulator_enabled), Depends(rate_limit("chat"))])
 def simulator_start_call(store_id: StorePath, request: Request):
-    return simulator.render(request.app.state.calls.start(store_id))
+    started = request.app.state.calls.start(store_id, client=client_key(request))
+    if started is None:
+        raise HTTPException(429, "Too many calls. Please try again later.", headers={"Retry-After": "1800"})
+    return simulator.render(started)
 
 
-@router.post("/api/phone/simulator/calls/{call_id}/turns", dependencies=[Depends(rate_limit("chat"))])
+@router.post("/api/phone/simulator/calls/{call_id}/turns", dependencies=[Depends(_simulator_enabled), Depends(rate_limit("chat"))])
 async def simulator_turn(call_id: CallId, body: PhoneTurnRequest, request: Request):
     inbound = simulator.parse_inbound({"call_id": call_id, **body.model_dump()})
     outbound = await run_in_threadpool(request.app.state.calls.handle, inbound)

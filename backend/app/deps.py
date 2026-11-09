@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Path, Request
@@ -21,7 +22,23 @@ def get_settings_dep(request: Request) -> Settings:
 
 
 def client_key(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    """The client's address for rate limits and phone-verification limits.
+
+    X-Forwarded-For is believed ONLY when the direct peer is a configured trusted proxy (TRUSTED_PROXIES); then the
+    right-most address that is not itself a trusted proxy is the client. Otherwise the header is ignored, so a
+    client cannot choose its own identity. Without trusted proxies, everyone behind one proxy shares one key."""
+    peer = request.client.host if request.client else "unknown"
+    trusted = set(getattr(request.app.state.settings, "trusted_proxies", ()) or ())
+    if peer in trusted:
+        hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        for hop in reversed(hops):
+            if hop in trusted:
+                continue
+            try:
+                return str(ipaddress.ip_address(hop))
+            except ValueError:
+                break          # malformed header: fall back to the proxy's own address
+    return peer
 
 
 def rate_limit(bucket: str):

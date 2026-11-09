@@ -30,7 +30,7 @@ function LoginForm({ next }) {
 
   const withNext = (path) => (next ? `${path}?next=${encodeURIComponent(next)}` : path);
   return (
-    <form className="card form" onSubmit={submit} aria-describedby="demo-hint">
+    <form className="card form" onSubmit={submit} aria-describedby={import.meta.env.DEV ? 'demo-hint' : undefined}>
       <h1>Sign in to {config.name}</h1>
       {next === '/checkout'
         ? <p className="notice notice-info">Sign in to continue to checkout. Your cart is kept.</p>
@@ -46,9 +46,12 @@ function LoginForm({ next }) {
       <p className="form-links">
         New to {config.name}? <Link to={withNext('/register')}>Create an account</Link> · <Link to="/forgot-password">Forgot password?</Link>
       </p>
-      <p id="demo-hint" className="demo-hint">
-        Demo account (synthetic): <code>{config.demoEmail}</code> / <code>{config.demoPassword}</code>
-      </p>
+      {/* Development builds only: production bundles contain no demo credentials (see each app main.jsx). */}
+      {import.meta.env.DEV && config.demoEmail && (
+        <p id="demo-hint" className="demo-hint">
+          Demo account (synthetic): <code>{config.demoEmail}</code> / <code>{config.demoPassword}</code>
+        </p>
+      )}
     </form>
   );
 }

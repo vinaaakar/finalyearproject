@@ -203,7 +203,7 @@ def test_tamil_and_hindi_never_go_to_the_model(settings):
     with make_client(settings, llm=fake) as c:
         for msg in ("உங்களிடம் கூடாரம் இருக்கிறதா?", "क्या चाय स्टॉक में है?"):
             assert ask(c, "store-a" if "கூ" in msg else "store-b", msg)["source"] == "rules"
-        assert ask(c, "store-a", "Do you have a tent?")["source"] == "llm"   # English still uses the model
+        assert ask(c, "store-a", "How long does shipping take?")["source"] == "llm"   # English policy answers still use the model
     assert len(fake.calls) == 1
     assert "கூடாரம்" not in json.dumps(fake.calls)
 

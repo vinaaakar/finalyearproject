@@ -8,7 +8,8 @@ message ─▶ language identification (language.py, unchanged)
         ─▶ intents + references (intent.py: shopping intents + customer-care intents, typos/quotes normalised)
         ─▶ verified data through the existing repository/commerce functions (care.py + service.py)
         ─▶ deterministic reply from reviewed templates (i18n.py + care_text.py)  ──▶  proposed actions (buttons)
-        ─▶ local LLM phrasing ONLY for plain English shopping answers, grounding-checked (unchanged rules)
+        ─▶ local LLM phrasing ONLY for English store-policy, greeting and contact answers, grounding-checked (Phase 1)
+        ─▶ final check: products/add-to-cart rebuilt from this store's catalogue; placeholders blocked
 ```
 
 Customer-specific answers (orders, payments, refunds, cancellations, carts), proposed actions, escalations and
@@ -28,7 +29,7 @@ every Tamil/Hindi reply are **deterministic**: the model is never called for the
 | Change items or address | Not supported by the system; unpaid → cancel and re-order; paid → support | Guided |
 | Payment status / failure | Latest payment record per order (declined, pending, confirmed with amount), link to the payment page, sandbox notice | Verified |
 | "Paid but nothing happened", double charge | What the records show; the one-successful-payment-per-order rule; real double charges → support (no reversals from chat) | Verified + guided |
-| Refund status | Orders recorded as *returned and refunded*; paid-then-cancelled orders flagged for support; otherwise "no refund recorded" — never an invented refund | Verified |
+| Refund status | Returned orders are described only as *returned*: there are no refund records, so the assistant says it can't confirm whether, how much or when a refund was issued (truth.py `REFUND_STATES`); paid-then-cancelled orders go to support; never an invented refund | Verified |
 | Returns, exchanges | Store's own policy text; delivery date + return window (days parsed from the store policy); returns/exchanges are started by e-mail | Verified + guided |
 | Damaged, defective, wrong or missing items | Steps, the minimum details to send (order number, description, photos), warranty/returns policy; no claim is registered from chat | Guided |
 | Product search, stock, budget | As before, plus in-stock alternatives when an item is sold out | Verified |
@@ -100,3 +101,22 @@ windows per store, account and checkout help, unsupported capabilities, human re
 failures, off-topic redirects, secrets never forwarded to the model, care answers never using the model, Tamil/Hindi
 action labels, voice-channel parity. Browser checks of the action buttons ran in headless Chrome on an isolated test
 stack (not a physical microphone).
+
+## Trust and correctness rules (Phase 1)
+
+- **Refunds**: no refund records exist, so a `returned` order is never called refunded (any language). See `assistant/truth.py`.
+- **Payments**: payment answers come from the configured provider's real capabilities (today: sandbox only — no cards, UPI,
+  wallets, gift cards or COD), never from the stored payment policy text.
+- **Policy text**: sentences promising services the system lacks (prepaid return labels, store credit) are dropped from answers
+  and from the model's context; the stored text itself still needs a reviewed data correction, so it is logged at start-up and
+  listed under `policy_warnings` in `/api/health`.
+- **Products**: product, price and stock answers are built from catalogue rows only (the model is not used for them). Every
+  product card and add-to-cart button is re-checked against this store's catalogue before sending.
+- **Model replies** (English policy/greeting/contact only) are rejected if they contain placeholders, links or markdown, prices,
+  numbers or rupee amounts not in the facts, catalogue products the answer didn't include, sign-in demands the draft didn't make,
+  or more than a few words that appear nowhere in the facts or the question.
+- **Budgets**: ₹ / Rs. / INR / rupees (also Tamil and Hindi forms) are recognised. The catalogue is priced in USD and no exchange
+  rate is configured, so a rupee budget is explained and not applied — never converted with a guessed rate.
+- **Tickets**: no ticket system exists; ticket requests get an honest answer and the store's support e-mail and hours.
+- **Each assistant's voice**: catalogue answers open with Scout's or Maple's own introduction; Scout adds a safety note for
+  harsh-conditions questions, Maple notes that caffeine/allergen/health data isn't in the listings.

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useStore } from '../StoreApp.jsx';
 import OrderCard from '../components/OrderCard.jsx';
@@ -12,6 +12,10 @@ export default function PaymentPage() {
   const [payment, setPayment] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Cancelling is consequential: first explain what will happen, then cancel only on an explicit second click.
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+  const cancelling = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -46,7 +50,22 @@ export default function PaymentPage() {
     setOrder(r.order);
     setPayment(r.payment);
   });
-  const cancel = () => run(async () => setOrder((await api.cancelOrder(number)).order));
+  const cancel = async () => {
+    if (cancelling.current) return;          // ignore double clicks while the request is in flight
+    cancelling.current = true;
+    try {
+      await run(async () => {
+        const r = await api.cancelOrder(number);
+        // Report success only when the server says the order is now cancelled.
+        if (r.order?.status !== 'cancelled') throw new Error('The order could not be cancelled. Please try again or contact support.');
+        setOrder(r.order);
+        setCancelled(true);
+        setConfirmCancel(false);
+      });
+    } finally {
+      cancelling.current = false;
+    }
+  };
 
   if (!session) return <div className="card form"><p>Please <Link to="/account">sign in</Link> to see this order.</p></div>;
   if (!order) return error ? <p className="notice notice-error" role="alert">{error}</p> : <p className="muted" aria-live="polite">Loading…</p>;
@@ -77,8 +96,27 @@ export default function PaymentPage() {
               </div>
             </>
           )}
-          <button type="button" className="btn btn-small link-btn" onClick={cancel} disabled={busy}>Cancel this order</button>
+          {!confirmCancel ? (
+            <button type="button" className="btn btn-small link-btn" onClick={() => setConfirmCancel(true)} disabled={busy}>Cancel this order</button>
+          ) : (
+            <div className="notice notice-warn" role="group" aria-label={`Confirm cancelling order ${order.order_number}`}>
+              <p>
+                <strong>Cancel order {order.order_number}?</strong> The order will be cancelled and its items released.
+                {' '}No payment has been taken for it{inFlight ? ', and the test payment in progress will be cancelled too' : ''}.
+                {' '}This can’t be undone.
+              </p>
+              <div className="detail-actions">
+                <button type="button" className="btn btn-danger" onClick={cancel} disabled={busy}>
+                  {busy ? 'Cancelling…' : `Yes, cancel order ${order.order_number}`}
+                </button>
+                <button type="button" className="btn" onClick={() => setConfirmCancel(false)} disabled={busy}>Keep my order</button>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+      {cancelled && order.status === 'cancelled' && (
+        <p className="notice notice-ok" role="status">Order {order.order_number} has been cancelled. No payment was taken.</p>
       )}
       {order.status === 'processing' && payment?.status === 'succeeded' && (
         <p className="notice notice-ok" role="status">Payment confirmed by the (sandbox) payment provider. Your order is being prepared.</p>

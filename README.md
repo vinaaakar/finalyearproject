@@ -73,8 +73,8 @@ Phone-verification ZIP codes: SA-10001 → `80302`, BB-20001 → `60614` (see `b
    │ Payments (payments/): provider interface + SANDBOX     │
    │ Accounts: register, sessions, sign-out, password reset │
    │ Assistant: intent rules → controlled repo calls        │
-   │   → private answers deterministic; others phrased by   │
-   │   Ollama llama3.2:3b → grounding check → fallback       │
+   │   → private + catalogue answers deterministic; policy   │
+   │   answers phrased by Ollama → strict grounding → rules │
    │ Speech: browser STT/TTS, or local whisper.cpp / `say`  │
    │ Phone: provider interface + call state machine (sim)   │
    └──────────┬───────────────────────┬────────────────────┘
@@ -164,7 +164,8 @@ See **docs/voice.md** for details and measured results. In short:
   the server. Uncertain or unsupported → a clarification with தமிழ் / English / हिन्दी buttons, never a guess.
   Language-neutral messages use the conversation language and are labelled as not detected.
 - **Replies in the same language**: Tamil and Hindi come from reviewed templates and translated store policies, with
-  facts inserted verbatim. English may be phrased by the LLM, with language and grounding enforced on the server.
+  facts inserted verbatim. English policy/greeting/contact answers may be phrased by the LLM, with language and strict
+  grounding enforced on the server; product, price and stock answers always come from catalogue rows (docs/customer-care.md).
 - **Speech in the same language**: local macOS voices Vani (ta-IN), Lekha (hi-IN), Rishi (en-IN) in the browser. Remote
   voices are never used. Fallback: server `say`, then text only with a notice.
 - Audio stays on this Mac when local STT is enabled. Without it, the browser's Web Speech API listens in one fixed
@@ -174,7 +175,8 @@ See **docs/voice.md** for details and measured results. In short:
 ## Phone
 
 A provider-independent interface plus a call state machine. Only a **text-based simulator** exists; every
-response contains `"simulated": true` and a `SIMULATION ONLY` notice. **No real phone calls are possible.**
+response contains `"simulated": true` and a `SIMULATION ONLY` notice. **No real phone calls are possible.** The simulator is
+enabled only in development (`PHONE_SIMULATOR_ENABLED` overrides) and limits order-verification guessing across calls.
 See `docs/phone-integration.md`.
 
 ## API overview
@@ -214,8 +216,10 @@ Reseed demo data (destructive): `python -m app.seed --reset`.
 
 ## Testing
 
-`scripts/test.sh` runs **217 backend tests** against separate `store_a_test` / `store_b_test` databases
-(never the dev data), then builds both storefronts. Coverage added since the first version:
+`scripts/test.sh` runs the service-script safety tests, then the backend tests against separate `store_a_test` /
+`store_b_test` databases (never the dev data), then builds both storefronts. Latest verified backend run (2026-11-09):
+**446 tests collected — 439 passed, 7 skipped** (the skipped ones are the real speech-engine tests, which need the model
+paths described below). Coverage added since the first version:
 cart pricing and stock rules, guest-cart merge, checkout transaction, idempotency (including concurrent
 submissions), price/stock re-checks, address validation, sandbox payments (approve, decline + retry,
 amount mismatch, client claims ignored, cancelled orders), order state machine, registration, sign-out

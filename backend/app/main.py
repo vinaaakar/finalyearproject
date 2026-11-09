@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -14,6 +15,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import db
+from . import repositories as repo
+from .assistant import truth
 from .commerce import CommerceError
 from .assistant.llm import OllamaClient
 from .assistant.service import Assistant
@@ -36,6 +39,30 @@ def _error(status: int, code: str, message: str, headers: dict | None = None, de
     return JSONResponse(status_code=status, content=body, headers=headers)
 
 
+# Responses that may carry personal data must never be stored by browsers or shared caches.
+_PRIVATE_PATH = re.compile(r"/(auth|me|orders|admin|cart|checkout|chat|payments|speech|phone)(/|$)")
+_DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+def _security_headers(request: Request, response, settings: Settings) -> None:
+    """Headers for every API response. The API serves JSON (and short audio clips), never pages to embed, so the
+    policy is maximally strict; the development-only API docs page loads its own scripts and is exempted from CSP.
+    Storefront pages are served by Vite (dev) or the web host (production): their headers are documented in
+    docs/security.md."""
+    h = response.headers
+    h["X-Content-Type-Options"] = "nosniff"
+    h["X-Frame-Options"] = "DENY"
+    h["Referrer-Policy"] = "no-referrer"
+    h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    h["Cross-Origin-Opener-Policy"] = "same-origin"
+    if not request.url.path.startswith(_DOCS_PATHS):
+        h["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    if settings.app_env == "production":
+        h["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if request.headers.get("authorization") or _PRIVATE_PATH.search(request.url.path):
+        h["Cache-Control"] = "no-store"
+
+
 def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool = True, mailer: EmailSender | None = None) -> FastAPI:
     settings = settings or get_settings()
     if llm is True:
@@ -47,11 +74,26 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
     async def lifespan(app: FastAPI):
         db.init_pools(settings.store_database_urls)
         log.info("API started (llm=%s)", f"ollama:{settings.ollama_model}" if llm else "disabled")
+        # Stored policy text that promises services this system doesn't provide. The assistant never repeats these
+        # claims (assistant/truth.py), but the text itself needs a reviewed data correction, so make it visible.
+        for store in StoreId:
+            try:
+                found = truth.policy_content_warnings(repo.get_policies(store, "en"))
+            except Exception:  # database not reachable yet: health reports that separately
+                continue
+            app.state.policy_warnings[store.value] = found
+            if found:
+                log.warning("Policy text for %s mentions unsupported services (%s); the assistant suppresses them. "
+                            "Correct the stored policy text with a reviewed data migration.", store.value, "; ".join(found))
         yield
         db.close_pools()
 
-    app = FastAPI(title="AI Voice Commerce — Customer Service API", version="0.1.0", lifespan=lifespan)
+    docs = settings.api_docs_enabled
+    app = FastAPI(title="AI Voice Commerce — Customer Service API", version="0.1.0", lifespan=lifespan,
+                  docs_url="/docs" if docs else None, redoc_url="/redoc" if docs else None,
+                  openapi_url="/openapi.json" if docs else None)
     app.state.settings = settings
+    app.state.policy_warnings = {}
     app.state.llm = llm
     app.state.payments = get_provider(settings.payment_provider)
     app.state.assistant = Assistant(llm, payments=app.state.payments)
@@ -73,9 +115,13 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
     async def request_log(request: Request, call_next):
         request_id = uuid.uuid4().hex[:12]
         start = time.perf_counter()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # unhandled errors would otherwise bypass this middleware (and its headers)
+            log.exception("Unhandled error: %s", type(exc).__name__)
+            response = _error(500, "internal_error", "Something went wrong on our side. Please try again.")
         response.headers["X-Request-ID"] = request_id
-        response.headers["X-Content-Type-Options"] = "nosniff"
+        _security_headers(request, response, settings)
         # Path only: query strings and bodies are never logged.
         log.info("%s %s %s %.0fms id=%s", request.method, request.url.path, response.status_code, (time.perf_counter() - start) * 1000, request_id)
         return response
@@ -109,6 +155,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
             "status": "ok" if all(dbs.values()) else "degraded",
             "databases": dbs,
             "payments": {"provider": app.state.payments.name, "sandbox": app.state.payments.sandbox},
+            # Topics whose stored policy text claims services that don't exist (suppressed in answers; text needs correcting).
+            "policy_warnings": {k: sorted({w.split(":")[0] for w in v}) for k, v in app.state.policy_warnings.items() if v},
             "llm": {"enabled": llm is not None, "available": llm_ok, "model": settings.ollama_model if llm else None,
                     "mode": "ollama" if llm_ok else "rule-based fallback"},
         }

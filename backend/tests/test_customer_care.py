@@ -272,7 +272,9 @@ def test_refund_status_is_never_invented(client):
     assert "can't see a refund recorded" in body["reply"] and "returned and refunded" not in body["reply"]
     maria = login(client, "store-b", MARIA, PW_B)
     body = ask(client, "store-b", "Did my refund for BB-20004 come through?", maria)
-    assert "Order BB-20004 is recorded as returned and refunded" in body["reply"]
+    # C1: a returned order is not proof of a refund (no refund records exist), so nothing may say it was refunded.
+    assert "Order BB-20004 is marked as returned" in body["reply"] and "can't see a refund record" in body["reply"]
+    assert "refunded" not in body["reply"].lower().replace("haven't been refunded", "")
     hi = ask(client, "store-b", "मुझे रिफंड नहीं मिला।", maria)
     assert hi["language"] == "hi" and "BB-20004" in hi["reply"] and DEVANAGARI.search(hi["reply"])
 
@@ -349,7 +351,8 @@ def test_card_numbers_and_passwords_are_flagged_and_never_sent_to_the_model(sett
         assert "Please don't share card numbers" in body["reply"] and "4111" not in body["reply"]
         assert fake.calls == []
         # An earlier message with a password is not forwarded with later questions either.
-        ask(c, "store-a", "Do you have a 2-person tent?", history=turns(("user", "my password is Hunter2Hunter2")))
+        # (A policy question: product questions no longer go to the model at all.)
+        ask(c, "store-a", "How long does shipping take?", history=turns(("user", "my password is Hunter2Hunter2")))
     assert fake.calls and "Hunter2Hunter2" not in str(fake.calls)
 
 

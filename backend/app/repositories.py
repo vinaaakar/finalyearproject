@@ -58,13 +58,39 @@ def list_products(store: StoreId, category: str | None = None, query: str | None
         ).fetchall()
 
 
+def get_products_by_slugs(store: StoreId, slugs: list[str]) -> dict[str, dict[str, Any]]:
+    """Exactly the requested products of THIS store (unknown slugs are simply absent). Bounded by the request,
+    not by the catalogue size."""
+    wanted = sorted({s for s in slugs if isinstance(s, str) and s})[:50]
+    if not wanted:
+        return {}
+    with store_connection(store) as conn:
+        rows = conn.execute(f"SELECT {_PRODUCT_COLS} FROM products WHERE slug = ANY(%s)", [wanted]).fetchall()
+    return {r["slug"]: r for r in rows}
+
+
+def products_mentioned_in(store: StoreId, text: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Products of THIS store whose full name appears in `text` (case-insensitive), in order of first mention.
+    The database does the matching, so it works for any catalogue size."""
+    if not text:
+        return []
+    with store_connection(store) as conn:
+        return conn.execute(
+            f"SELECT {_PRODUCT_COLS} FROM products WHERE strpos(lower(%s), lower(name)) > 0 "
+            "ORDER BY strpos(lower(%s), lower(name)), length(name) DESC LIMIT %s",
+            [text[:4000], text[:4000], limit],
+        ).fetchall()
+
+
 def get_product_by_slug(store: StoreId, slug: str) -> dict[str, Any] | None:
     with store_connection(store) as conn:
         return conn.execute(f"SELECT {_PRODUCT_COLS} FROM products WHERE slug = %s", [slug]).fetchone()
 
 
-def search_products_by_terms(store: StoreId, terms: list[str], limit: int = 5, max_price_cents: int | None = None) -> list[dict[str, Any]]:
-    """Rank products by how many of the given terms appear in name/category/description (in-stock first on ties)."""
+def search_products_by_terms(store: StoreId, terms: list[str], limit: int = 5, max_price_cents: int | None = None,
+                             category: str | None = None) -> list[dict[str, Any]]:
+    """Rank products by how many of the given terms appear in name/category/description (in-stock first on ties).
+    `max_price_cents` is in the catalogue's own currency; callers must not pass an amount in another currency."""
     terms = [t for t in terms if t][:8]
     if not terms:
         return []
@@ -77,11 +103,24 @@ def search_products_by_terms(store: StoreId, terms: list[str], limit: int = 5, m
     with store_connection(store) as conn:
         rows = conn.execute(
             f"SELECT {_PRODUCT_COLS}, score FROM (SELECT {_PRODUCT_COLS}, ({score}) AS score FROM products) s "
-            "WHERE score > 0 AND (%s::int IS NULL OR price_cents <= %s::int) ORDER BY score DESC, (stock_qty > 0) DESC, name LIMIT %s",
-            [*params, max_price_cents, max_price_cents, limit],
+            "WHERE score > 0 AND (%s::int IS NULL OR price_cents <= %s::int) AND (%s::text IS NULL OR category = %s::text) "
+            "ORDER BY score DESC, (stock_qty > 0) DESC, name LIMIT %s",
+            [*params, max_price_cents, max_price_cents, category, category, limit],
         ).fetchall()
     # Drop weak partial matches (e.g. "rain" inside a tent's "rainfly") when a strong match exists.
     return [r for r in rows if r["score"] * 2 >= rows[0]["score"]] if rows else rows
+
+
+def search_catalog(store: StoreId, query: str, category: str | None = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    """Storefront search: the same term + synonym ranking the assistants use ("backpack" also finds the Daypack),
+    falling back to a plain substring match when the query has no usable words. This store's rows only."""
+    from .assistant.intent import extract_search_terms  # local import: the assistant package imports this module
+
+    terms = extract_search_terms(query)
+    rows = search_products_by_terms(store, terms, limit=offset + limit, category=category) if terms else []
+    if not rows:
+        return list_products(store, category=category, query=query, limit=limit, offset=offset)
+    return rows[offset:offset + limit]
 
 
 def recommend_products(store: StoreId, max_price_cents: int | None = None, limit: int = 3) -> list[dict[str, Any]]:

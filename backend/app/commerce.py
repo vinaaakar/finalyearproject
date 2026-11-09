@@ -265,6 +265,9 @@ def cancel_pending_order(store: StoreId, customer_id: int, order_number: str) ->
     """A customer may cancel an order that has not been paid yet; its stock is released."""
     with store_connection(store) as conn, conn.transaction():
         order = _owned_order_for_update(conn, customer_id, order_number)
+        if order["status"] == "cancelled":
+            # A repeated request (double click, second tab) changes nothing and says so.
+            raise CommerceError(409, "This order is already cancelled.", "already_cancelled")
         if order["status"] != "pending_payment":
             raise CommerceError(409, "Only unpaid orders can be cancelled here. Please contact support.", "invalid_state")
         if conn.execute("SELECT 1 FROM payments WHERE order_id = %s AND status = 'succeeded'", [order["id"]]).fetchone():

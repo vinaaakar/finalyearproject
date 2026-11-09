@@ -41,7 +41,11 @@ def products(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
 ):
-    rows = repo.list_products(store_id, category=category or None, query=(q or "").strip() or None, limit=limit, offset=offset)
+    query = (q or "").strip()
+    if query:
+        rows = repo.search_catalog(store_id, query, category=category or None, limit=limit, offset=offset)
+    else:
+        rows = repo.list_products(store_id, category=category or None, limit=limit, offset=offset)
     return {"products": [public_product(p) for p in rows]}
 
 

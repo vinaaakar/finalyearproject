@@ -19,8 +19,8 @@ const config = {
   // productImages (e.g. a file placed in this app's public/products/ folder); photos take priority.
   art: productArt,
   productImages: {},
-  demoEmail: 'alex.rivera@example.com',
-  demoPassword: 'TrailDemo!2026',
+  // Synthetic demo account, shown on the sign-in page in development builds only (stripped from production bundles).
+  ...(import.meta.env.DEV ? { demoEmail: 'alex.rivera@example.com', demoPassword: 'TrailDemo!2026' } : {}),
   suggestions: {
     ta: ['உங்களிடம் இரண்டு பேர் தங்கும் கூடாரம் இருக்கிறதா?', 'திருப்பி அனுப்பும் கொள்கை என்ன?', 'என் ஆர்டர் SA-10001 எங்கே?'],
     en: ['Do you have a 2-person tent?', 'What is your return policy?', 'Where is my order SA-10001?'],

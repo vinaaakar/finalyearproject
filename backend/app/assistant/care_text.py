@@ -143,9 +143,12 @@ CARE: dict[str, dict[str, str]] = {
         "hi": "ऑर्डर {number} का भुगतान ({amount}) पक्का हो गया है, और ऑर्डर {status}।",
     },
     "pay_cancelled_paid": {
-        "ta": "ஆர்டர் {number}-க்கு {amount} பணம் பதிவான பிறகு அது ரத்து செய்யப்பட்டது. இதற்கான ரீஃபண்டை ஆதரவுக் குழு கையாளும் — {email}-ஐத் தொடர்பு கொள்ளுங்கள்.",
-        "en": "Order {number} was cancelled after a payment of {amount} was recorded. A refund for this is handled by the support team — please email {email}.",
-        "hi": "ऑर्डर {number} {amount} का भुगतान दर्ज होने के बाद रद्द हुआ। इसका रिफ़ंड सपोर्ट टीम संभालती है — कृपया {email} पर लिखें।",
+        "ta": "ஆர்டர் {number}-க்கு {amount} பணம் பதிவான பிறகு அது ரத்து செய்யப்பட்டது. இதற்கான ரீஃபண்ட் பதிவு எதுவும் எனக்குத் தெரியவில்லை; "
+              "{email}-க்கு எழுதினால் ஆதரவுக் குழு சரிபார்த்து, உரிய ரீஃபண்டை ஏற்பாடு செய்யும். அரட்டையிலிருந்து என்னால் ரீஃபண்ட் வழங்க முடியாது.",
+        "en": "Order {number} was cancelled after a payment of {amount} was recorded. I can't see a refund recorded for it; please email "
+              "{email} so the support team can check and arrange any refund that's due. I can't issue refunds from the chat.",
+        "hi": "ऑर्डर {number} {amount} का भुगतान दर्ज होने के बाद रद्द हुआ। इसका कोई रिफ़ंड रिकॉर्ड मुझे नहीं दिखता; कृपया {email} पर लिखें "
+              "ताकि सपोर्ट टीम जाँच करके देय रिफ़ंड की व्यवस्था करे। मैं चैट से रिफ़ंड जारी नहीं कर सकता।",
     },
     "pay_all_settled": {
         "ta": "உங்கள் எந்த ஆர்டரும் பணத்திற்காகக் காத்திருக்கவில்லை.",
@@ -156,6 +159,19 @@ CARE: dict[str, dict[str, str]] = {
         "ta": "இந்த {store} கணக்கில் ஆர்டர்களோ பணப் பதிவுகளோ எதுவும் தெரியவில்லை.",
         "en": "I can't see any orders or payments on this {store} account.",
         "hi": "इस {store} अकाउंट में मुझे कोई ऑर्डर या भुगतान नहीं दिख रहा।",
+    },
+    "ticket_none": {
+        "ta": "இந்த ஸ்டோரில் இன்னும் டிக்கெட் அமைப்பு இல்லை, எனவே என்னால் டிக்கெட் உருவாக்கவோ தேடவோ முடியாது. {store} குழு {email}-இல் உதவும் "
+              "({hours}) — ஆர்டர் பற்றியது என்றால் ஆர்டர் எண்ணையும் சேர்க்கவும்.",
+        "en": "There's no ticket system in this store yet, so I can't create or look up a ticket. The {store} team can help at {email} "
+              "({hours}) — include your order number if it's about an order.",
+        "hi": "इस स्टोर में अभी कोई टिकट सिस्टम नहीं है, इसलिए मैं टिकट न बना सकता हूँ, न ढूँढ सकता हूँ। {store} टीम {email} पर मदद कर सकती है "
+              "({hours}) — अगर बात किसी ऑर्डर की है तो ऑर्डर नंबर भी लिखें।",
+    },
+    "budget_currency": {
+        "ta": "எங்கள் விலைகள் {currency} ({code})-இல் உள்ளன, எனவே {asked} பட்ஜெட்டை என்னால் பயன்படுத்த முடியாது — நாணய மாற்று விகிதத்தை நான் ஊகிக்க மாட்டேன்.",
+        "en": "Our prices are listed in {currency} ({code}), so I can't apply a {asked} budget — I won't guess an exchange rate.",
+        "hi": "हमारी कीमतें {currency} ({code}) में हैं, इसलिए मैं {asked} का बजट लागू नहीं कर सकता — मैं विनिमय दर का अंदाज़ा नहीं लगाऊँगा।",
     },
     "pay_sandbox": {
         "ta": " இந்த ஸ்டோரில் பணம் சோதனை முறையில் மட்டுமே இயங்குகிறது: உண்மையான பணம் எதுவும் நகராது, கார்டு விவரங்கள் சேகரிக்கப்படுவதில்லை.",
@@ -173,10 +189,15 @@ CARE: dict[str, dict[str, str]] = {
         "hi": "कृपया साइन इन करें ताकि मैं आपका भुगतान और ऑर्डर देख सकूँ। मैं कभी आपका कार्ड नंबर, CVV या पासवर्ड नहीं माँगूँगा।",
     },
     # ---- refunds, returns & exchanges ------------------------------------------------------------
+    # A returned order does not prove a refund: there are no refund records (see truth.REFUND_STATES), so the
+    # assistant must not say a refund was issued, how much, or when.
     "refund_returned": {
-        "ta": "ஆர்டர் {number} திருப்பி அனுப்பப்பட்டு பணம் திருப்பித் தரப்பட்டதாகப் பதிவாகியுள்ளது.",
-        "en": "Order {number} is recorded as returned and refunded.",
-        "hi": "ऑर्डर {number} लौटाया गया और रिफ़ंड हुआ, ऐसा दर्ज है।",
+        "ta": "ஆர்டர் {number} திருப்பி அனுப்பப்பட்டதாகப் பதிவாகியுள்ளது. அதற்கான ரீஃபண்ட் பதிவு எதுவும் எனக்குத் தெரியவில்லை, எனவே ரீஃபண்ட் "
+              "வழங்கப்பட்டதா, எவ்வளவு, எப்போது என்று என்னால் உறுதிப்படுத்த முடியாது. ஆர்டர் எண்ணுடன் {email}-க்கு எழுதினால் குழு சரிபார்க்கும்.",
+        "en": "Order {number} is marked as returned. I can't see a refund record for it, so I can't confirm whether a refund has been "
+              "issued, how much, or when. Please email {email} with your order number and the team can check.",
+        "hi": "ऑर्डर {number} लौटाया गया दर्ज है। इसके लिए मुझे कोई रिफ़ंड रिकॉर्ड नहीं दिखता, इसलिए मैं पक्का नहीं कह सकता कि रिफ़ंड "
+              "जारी हुआ या नहीं, कितना या कब। ऑर्डर नंबर के साथ {email} पर लिखें, टीम जाँच करेगी।",
     },
     "refund_none": {
         "ta": "உங்கள் ஆர்டர்களில் எந்த ரீஃபண்டும் பதிவாகியிருப்பதாகத் தெரியவில்லை. ஒரு பொருளைத் திருப்பி அனுப்பியும் பணம் வரவில்லை என்றால், ஆர்டர் எண்ணுடன் {email}-ஐத் தொடர்பு கொள்ளுங்கள் — அரட்டையிலிருந்து நான் ரீஃபண்டை வழங்கவோ விரைவுபடுத்தவோ முடியாது.",
@@ -530,4 +551,45 @@ TIP_ALIASES: dict[str, str] = {
     "press": "press", "french": "press", "dripper": "dripper", "pour": "dripper", "pour-over": "dripper", "v60": "dripper",
     "grinder": "grinder", "burr": "grinder", "kettle": "kettle", "tea": "tea", "sencha": "tea", "green": "tea",
     "chai": "chai", "bean": "bean", "coffee": "bean", "honey": "honey",
+}
+
+
+# ---- per-store voice for catalogue answers ----------------------------------------------------------------
+# Same catalogue rows, different introduction: Scout is practical trail gear, Maple is the coffee & tea shelf.
+FOUND_INTRO: dict[str, dict[str, str]] = {
+    "store-a": {"ta": "எங்கள் மலையேற்றப் பொருட்களில் இவை பொருந்துகின்றன: ", "en": "From our trail gear, these match: ",
+                "hi": "हमारे ट्रेल गियर में ये मेल खाते हैं: "},
+    "store-b": {"ta": "எங்கள் காபி, தேநீர் வரிசையில் இவை பொருந்துகின்றன: ", "en": "From our coffee and tea shelf, these match: ",
+                "hi": "हमारी कॉफ़ी और चाय की शेल्फ़ से ये मेल खाते हैं: "},
+}
+
+CURRENCY_NAMES: dict[str, dict[str, str]] = {
+    "USD": {"ta": "அமெரிக்க டாலர்", "en": "US dollars", "hi": "अमेरिकी डॉलर"},
+    "INR": {"ta": "இந்திய ரூபாய்", "en": "Indian rupees", "hi": "भारतीय रुपये"},
+}
+
+# When a shopping question asks about conditions or properties the catalogue doesn't describe, each assistant
+# says plainly that it can only go by the product descriptions (Scout: safety; Maple: caffeine/health/taste).
+import re as _re  # noqa: E402
+
+ADVICE_LIMITS: dict[str, dict] = {
+    "store-a": {
+        "rx": _re.compile(r"winter|snow|cold|freez|sub-?zero|below zero|altitude|alpine climb|mountaineer|storm|monsoon|heavy rain|desert|"
+                          r"extreme|expedition|-\d+\s*°|பனி|குளிர்|மழைக்காலம்|உயரமான|बर्फ|ठंड|सर्दी|मानसून|ऊँचाई|ऊंचाई", _re.I),
+        "ta": "தயாரிப்பு விளக்கங்களில் உள்ளதை மட்டுமே என்னால் சொல்ல முடியும். நீங்கள் எதிர்பார்க்கும் சூழலுக்கு ஒவ்வொரு பொருளின் "
+              "மதிப்பீட்டையும் சரிபாருங்கள்; கடுமையான சூழல்களுக்கு அனுபவமுள்ளவர்களின் ஆலோசனையைப் பெறுங்கள்.",
+        "en": "I can only go by the product descriptions above. Check each item's rating against the conditions you expect, and get "
+              "experienced advice before heading into harsh conditions.",
+        "hi": "मैं सिर्फ़ प्रोडक्ट विवरण के आधार पर बता सकता हूँ। जिन हालात की आप उम्मीद करते हैं, उनके हिसाब से हर सामान की रेटिंग जाँचें, "
+              "और कठिन हालात में जाने से पहले अनुभवी लोगों की सलाह लें।",
+    },
+    "store-b": {
+        "rx": _re.compile(r"caffeine|decaf|health|healthy|pregnan|allerg|calorie|sugar|gluten|vegan|organic|acidity|stomach|"
+                          r"காஃபின்|ஆரோக்கிய|ஒவ்வாமை|कैफीन|कैफ़ीन|सेहत|स्वास्थ्य|एलर्जी", _re.I),
+        "ta": "தயாரிப்பு விளக்கங்களில் உள்ளதை மட்டுமே என்னால் சொல்ல முடியும் — காஃபின் அளவு, ஒவ்வாமை அல்லது ஆரோக்கியத் தகவல்கள் "
+              "எங்கள் பட்டியலில் இல்லை.",
+        "en": "I can only go by the product descriptions above — caffeine levels, allergen and health details aren't part of our "
+              "listings.",
+        "hi": "मैं सिर्फ़ प्रोडक्ट विवरण के आधार पर बता सकता हूँ — कैफ़ीन की मात्रा, एलर्जी या सेहत से जुड़ी जानकारी हमारी लिस्टिंग में नहीं है।",
+    },
 }

@@ -180,8 +180,27 @@ def seed_all(database_urls: dict[str, str], reset: bool = False) -> None:
         seed_store(store, database_urls[store.value], reset)
 
 
+def demo_seeding_refusal(app_env: str, reset: bool, allow_non_development: bool) -> str | None:
+    """Why seeding must not run here, or None. The seed creates accounts with PUBLISHED demo passwords
+    (DEMO_PASSWORDS, AGENT_PASSWORD) and --reset deletes every customer, order and payment, so outside development
+    it is refused unless explicitly allowed — and --reset is never allowed outside development."""
+    if app_env == "development":
+        return None
+    if reset:
+        return f"--reset is refused when APP_ENV={app_env}: it deletes all customers, orders and payments."
+    if not allow_non_development:
+        return (f"Refusing to seed demo data when APP_ENV={app_env}: it creates accounts with published passwords. "
+                "Pass --allow-demo-data only for a disposable demo environment.")
+    return None
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reset", action="store_true", help="truncate and reseed demo data")
+    parser.add_argument("--reset", action="store_true", help="truncate and reseed demo data (development only)")
+    parser.add_argument("--allow-demo-data", action="store_true", help="allow demo accounts outside development (disposable demos only)")
     args = parser.parse_args()
-    seed_all(load_settings().store_database_urls, reset=args.reset)
+    settings = load_settings()
+    refusal = demo_seeding_refusal(settings.app_env, args.reset, args.allow_demo_data)
+    if refusal:
+        raise SystemExit(refusal)
+    seed_all(settings.store_database_urls, reset=args.reset)

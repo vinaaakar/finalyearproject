@@ -96,7 +96,8 @@ class FakeLLM:
 def test_llm_receives_only_current_store_context(settings):
     fake = FakeLLM()
     with make_client(settings, llm=fake) as c:
-        body = chat(c, "store-a", "Do you have coffee or a tent?")
+        # Policy questions still go to the model (product questions are answered from catalogue rows only).
+        body = chat(c, "store-a", "How long does shipping take?")
     assert body["source"] == "llm" and body["reply"] == "LLM reply"
     sent = json.dumps(fake.calls[0])
     assert "Summit Trail" in sent

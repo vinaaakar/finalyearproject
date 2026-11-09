@@ -30,7 +30,7 @@ from .. import repositories as repo
 from ..commerce import CartOwner
 from ..security import Principal
 from ..stores import ORDER_PREFIX, STORE_BRANDING, StoreId
-from . import care_text, i18n
+from . import care_text, i18n, truth
 from .care import CareDesk, CareOutcome
 from .intent import Intent, detect_intent, sensitive_kind
 from .language import BCP47, LanguageResult, identify
@@ -43,9 +43,11 @@ PRIVATE_INTENTS = frozenset({"order_status", "cart"})
 # The small local model (llama3.2:3b) is unreliable in Tamil and Hindi and could alter facts while
 # translating, so Tamil/Hindi replies always come from the reviewed templates in i18n.py.
 LLM_LANGUAGES = frozenset({"en"})
-# The model may only phrase plain shopping answers (catalogue, policies, greetings). Everything customer-specific,
+# The model may only rephrase store-policy, greeting and contact answers. Product, price and stock answers are
+# built from catalogue rows (the model could otherwise name products the store doesn't sell, as the audit
+# found); payment answers come from the payment provider's real capabilities. Everything customer-specific,
 # every proposed action and every care/escalation answer stays deterministic.
-LLM_SAFE_INTENTS = frozenset({"product", "price", "stock", "shipping", "returns", "warranty", "payment", "greeting", "contact"})
+LLM_SAFE_INTENTS = frozenset({"shipping", "returns", "warranty", "greeting", "contact"})
 PERSONA = {
     StoreId.STORE_A: "a knowledgeable, practical outdoor-gear specialist: friendly, concise and safety-conscious",
     StoreId.STORE_B: "a knowledgeable coffee, tea and brewing specialist: warm, calm and concise",
@@ -59,12 +61,26 @@ STATUS_LABELS = {
     "out_for_delivery": "out for delivery",
     "delivered": "delivered",
     "cancelled": "cancelled",
-    "returned": "returned and refunded",
+    # A returned order does NOT imply a refund: there are no refund records (see truth.REFUND_STATES).
+    "returned": "returned",
 }
 
 
 def money(cents: int) -> str:
     return f"${cents / 100:,.2f}"
+
+
+def format_amount(minor: int, currency: str) -> str:
+    """A customer's stated amount, shown back in their own currency (never converted)."""
+    if currency == "INR":
+        whole, paise = divmod(minor, 100)
+        digits = str(whole)
+        if len(digits) > 3:   # Indian grouping: 1,00,000
+            head, tail = digits[:-3], digits[-3:]
+            head = ",".join([head[max(0, i - 2):i] for i in range(len(head), 0, -2)][::-1])
+            digits = f"{head},{tail}"
+        return f"₹{digits}" + (f".{paise:02d}" if paise else "")
+    return money(minor)
 
 
 @dataclass
@@ -111,6 +127,7 @@ def public_order(o: dict[str, Any]) -> dict[str, Any]:
 class Assistant:
     def __init__(self, llm: OllamaClient | None, payments=None):
         self.llm = llm
+        self.payments = payments
         self.care = CareDesk(payments)
 
     # ---- context gathering (controlled data access only) -------------------------------
@@ -123,7 +140,9 @@ class Assistant:
                       "order_number_prefix": ORDER_PREFIX[store]},
             "customer_signed_in": principal is not None,
         }
-        policies = repo.get_policies(store, lang)
+        # Policy text is filtered: payment answers come from the provider's real capabilities and sentences that
+        # promise unsupported services (prepaid labels, store credit) are dropped (see truth.py).
+        policies = truth.verified_policies(repo.get_policies(store, lang), self.payments, lang)
         wanted = intent.intents & {"shipping", "returns", "warranty", "payment"}
         if wanted:
             ctx["policies"] = {t: policies[t] for t in sorted(wanted) if t in policies}
@@ -134,11 +153,18 @@ class Assistant:
                 ctx["shipping_rates"]["free_standard_shipping_from"] = money(rates["free_shipping_min_cents"])
 
         if "product" in intent.intents:
+            # A budget is applied only in the catalogue's own currency. A rupee budget against dollar prices would
+            # need an exchange rate; none is configured, so we say so instead of guessing (never a hard-coded rate).
+            catalogue_currency = (profile.get("currency") or "USD").strip().upper()
+            limit = intent.max_price_cents
+            if limit is not None and intent.budget_currency and intent.budget_currency != catalogue_currency:
+                ctx["budget_not_applied"] = {"asked": format_amount(limit, intent.budget_currency), "catalogue_currency": catalogue_currency}
+                limit = None
             if intent.search_terms:
-                found = repo.search_products_by_terms(store, intent.search_terms, max_price_cents=intent.max_price_cents)
+                found = repo.search_products_by_terms(store, intent.search_terms, max_price_cents=limit)
             else:
                 # No product words ("recommend something under $50", "ஏதாவது பரிந்துரை செய்யுங்கள்"): suggest in-stock items.
-                found = repo.recommend_products(store, intent.max_price_cents)
+                found = repo.recommend_products(store, limit)
             ctx["products"] = [public_product(p) for p in found]
             sold_out = [p for p in found[:3] if p["stock_qty"] <= 0]
             if sold_out:
@@ -147,8 +173,8 @@ class Assistant:
                 alts = [p for p in repo.list_products(store, category=sold_out[0]["category"], limit=20)
                         if p["stock_qty"] > 0 and p["slug"] not in listed]
                 ctx["alternatives"] = [public_product(p) for p in alts[:2]]
-            if intent.max_price_cents is not None:
-                ctx["budget"] = money(intent.max_price_cents)
+            if limit is not None:
+                ctx["budget"] = money(limit)
             if not found:
                 ctx["categories"] = repo.list_categories(store)
 
@@ -225,15 +251,26 @@ class Assistant:
 
         if "product" in intents and "products" not in skip:
             products = ctx.get("products", [])
+            if (nb := ctx.get("budget_not_applied")):
+                parts.append(i18n.t(lang, "budget_currency", asked=nb["asked"],
+                                    currency=care_text.CURRENCY_NAMES.get(nb["catalogue_currency"], {}).get(lang, nb["catalogue_currency"]),
+                                    code=nb["catalogue_currency"]))
             if products:
                 lines = []
-                intro = i18n.t(lang, "found_budget", budget=ctx["budget"]) if ctx.get("budget") else i18n.t(lang, "found")
+                # Each assistant introduces the catalogue in its own voice; the facts that follow are the same rows.
+                intro = (i18n.t(lang, "found_budget", budget=ctx["budget"]) if ctx.get("budget")
+                         else care_text.FOUND_INTRO[store.value][lang])
                 for p in products[:3]:
                     stock = i18n.t(lang, "in_stock") if p["in_stock"] else i18n.t(lang, "out_of_stock")
                     if p["in_stock"] and p["stock_qty"] <= 5:
                         stock = i18n.t(lang, "low_stock", n=p["stock_qty"])
-                    lines.append(f"{p['name']} — {p['price']}, {stock}")
+                    # The catalogue descriptions are English, so they are quoted only in English replies.
+                    desc = f" ({p['description'].rstrip('.')})" if lang == "en" and p.get("description") else ""
+                    lines.append(f"{p['name']} — {p['price']}, {stock}{desc}")
                 parts.append(intro + "; ".join(lines) + i18n.end(lang))
+                limits = care_text.ADVICE_LIMITS.get(store.value)
+                if limits and limits["rx"].search(intent.raw):
+                    parts.append(limits[lang])
                 if ctx.get("alternatives"):
                     parts.append(i18n.t(lang, "alternatives", list=", ".join(f"{a['name']} ({a['price']})" for a in ctx["alternatives"])).strip())
             elif not intent.keyword_product and not (intents - {"product"}):
@@ -314,17 +351,34 @@ class Assistant:
         deterministic = (intent.intents & PRIVATE_INTENTS or not intent.intents <= LLM_SAFE_INTENTS or intent.sensitive
                          or care.actions or care.lead or care.body or care.tail or lang not in LLM_LANGUAGES
                          or self._is_generic(fallback, store, s["name"]))  # redirects are not rephrased by the model
-        if deterministic:
-            return result  # private data, actions, care answers, or Tamil/Hindi: deterministic reply only
-        if self.llm is not None and self.llm.is_available():
+        if not deterministic and self.llm is not None and self.llm.is_available():
             try:
                 reply = self.llm.chat(self._messages(store, message, ctx, fallback, history or []))
-                if self.grounded(store, reply, ctx, fallback, lang):
+                # Only the catalogue products the reply actually names (matched in the database: any catalogue size).
+                catalog_names = [p["name"] for p in repo.products_mentioned_in(store, reply)]
+                if self.grounded(store, reply, ctx, fallback, lang, message=message, catalog_names=catalog_names):
                     result.reply, result.source = reply, "llm"
                 else:
                     log.info("LLM reply failed grounding check; using rule-based reply")
             except LLMUnavailable:
                 log.info("LLM unavailable; using rule-based reply")
+        return self._finalise(store, result, lang, s["name"])
+
+    def _finalise(self, store: StoreId, result: ChatResult, lang: str, store_name: str) -> ChatResult:
+        """Last checks before anything reaches the customer, whichever path produced the reply:
+        - every product card and add-to-cart button must be a real product of THIS store, shown with the
+          server's own name, price and stock (never values carried through from elsewhere);
+        - no unresolved placeholder, template variable or link may be sent."""
+        if result.products or any(a.get("type") == "add_to_cart" for a in result.actions):
+            # Look up exactly the referenced slugs in THIS store's database (no catalogue-size cap).
+            slugs = [p.get("slug") for p in result.products] + [a.get("slug") for a in result.actions if a.get("type") == "add_to_cart"]
+            catalog = repo.get_products_by_slugs(store, slugs)
+            result.products = [public_product(catalog[p["slug"]]) for p in result.products if p.get("slug") in catalog]
+            result.actions = [a for a in result.actions if a.get("type") != "add_to_cart"
+                              or (a.get("slug") in catalog and catalog[a["slug"]]["stock_qty"] > 0)]
+        if truth.has_placeholder(result.reply):
+            log.error("Blocked a reply containing a placeholder (source=%s, store=%s)", result.source, store.value)
+            result.reply, result.source = i18n.t(lang, "help", store=store_name), "rules"
         return result
 
     @staticmethod
@@ -339,23 +393,46 @@ class Assistant:
         return cleaned in {re.sub(r"\.\.(?=\s|$)", ".", g) for g in generic}
 
     @staticmethod
-    def grounded(store: StoreId, reply: str, ctx: dict[str, Any], draft: str, lang: str = "en") -> bool:
-        """Reject model replies containing facts that are not in the verified context, or written in the wrong language."""
+    def grounded(store: StoreId, reply: str, ctx: dict[str, Any], draft: str, lang: str = "en", *, message: str = "",
+                 catalog_names: list[str] | None = None) -> bool:
+        """Reject model replies containing anything that is not in the verified context: wrong language, unknown
+        prices or numbers, order numbers, other stores, product names that weren't part of the answer, placeholders,
+        links/markup, sign-in demands the draft didn't make, or too much vocabulary that appears nowhere in the facts."""
         # Language enforcement: the model is only used for English; any Tamil/Devanagari/Arabic script means it drifted.
         if lang == "en" and re.search(r"[\u0B80-\u0BFF\u0900-\u097F\u0600-\u06FF]", reply):
             return False
+        if truth.has_placeholder(reply) or truth.has_link_or_markup(reply):
+            return False
+        facts = json.dumps(ctx, default=str, ensure_ascii=False) + " " + draft
+
         def cents(m: re.Match) -> int:
             return int(m.group(1).replace(",", "")) * 100 + int(m.group(2) or 0)
 
-        allowed = {cents(m) for m in _MONEY_RE.finditer(json.dumps(ctx, default=str) + " " + draft)}
+        allowed = {cents(m) for m in _MONEY_RE.finditer(facts)}
         if any(cents(m) not in allowed for m in _MONEY_RE.finditer(reply)):
+            return False
+        if re.search(r"\u20B9|\brs\.?\s*\d|\binr\b|\brupees?\b", reply, re.I) and not re.search(r"\u20B9|\binr\b|rupee", facts, re.I):
+            return False
+        # Every number the model writes must be one the facts (or the customer) already contain.
+        def numbers(text: str) -> set[str]:
+            # "39.00" and "39" are the same number; "2-day" yields "2".
+            return {re.sub(r"\.0+$", "", n) for n in re.findall(r"\d+(?:\.\d+)?", text.replace(",", ""))}
+
+        if numbers(reply) - numbers(facts + " " + message):
             return False
         # Order numbers never come from the model (order answers are deterministic).
         if re.search(r"\b[A-Za-z]{2}-\d{5}\b", reply):
             return False
-        other = [b for s, b in STORE_BRANDING.items() if s != store]
         lowered = reply.lower()
-        return not any(b["name"].lower() in lowered or re.search(rf"\b{re.escape(b['assistant_name'].lower())}\b", lowered) for b in other)
+        other = [b for s, b in STORE_BRANDING.items() if s != store]
+        if any(b["name"].lower() in lowered or re.search(rf"\b{re.escape(b['assistant_name'].lower())}\b", lowered) for b in other):
+            return False
+        # Real products of this store that the verified answer did not include must not be introduced by the model.
+        if any(n.lower() in lowered and n.lower() not in facts.lower() for n in (catalog_names or [])):
+            return False
+        if re.search(r"\b(sign|log) ?in\b|\blogin\b", lowered) and not re.search(r"\b(sign|log) ?in\b|\blogin\b|login_required", facts, re.I):
+            return False
+        return len(truth.novel_words(reply, facts + " " + message)) <= truth.MAX_NOVEL_WORDS
 
     def _messages(self, store: StoreId, message: str, ctx: dict[str, Any], draft: str, history: list[dict[str, str]]) -> list[dict[str, str]]:
         brand = STORE_BRANDING[store]

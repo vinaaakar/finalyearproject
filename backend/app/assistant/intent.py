@@ -12,8 +12,60 @@ from dataclasses import dataclass, field
 from .language import ROMANIZED
 
 ORDER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2})[-\s]?(\d{5})\b")
-# "under $50", "below 30 dollars", "less than $25.50", "max $100"
-BUDGET_RE = re.compile(r"\b(?:under|below|less than|cheaper than|max(?:imum)?|up to|at most)\s*\$?\s*(\d{1,5}(?:\.\d{1,2})?)", re.I)
+
+# ---- budgets ("under $50", "below ₹5,000", "Rs. 5000 க்குள்", "5000 रुपये से कम") ---------------------------
+# The currency is kept, never assumed to be the catalogue's: comparing a rupee budget with dollar prices
+# would need an exchange rate, and the assistant must not invent one (see Assistant.gather).
+_INR = r"₹|\brs\b\.?|\binr\b|\brupees?\b|\brupaye\b|ரூபாய்|ரூ\.|रुपये|रुपए|रुपया|रु\."
+_USD = r"\$|\busd\b|\bdollars?\b|டாலர்|डॉलर"
+_CUR = rf"(?:{_INR}|{_USD})"
+_AMOUNT = r"(?P<whole>\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(?P<frac>\d{1,2}))?(?P<k>\s*k\b)?"
+_EN_LIMIT = r"under|below|less than|cheaper than|max(?:imum)?|up to|at most|within|not more than|no more than|budget(?: is| of)?"
+_NATIVE_LIMIT = (r"க்குள்|க்குக்?\s*கீழ்|க்குக்?\s*குறைவா|से\s*कम|के\s*अंदर|के\s*भीतर|तक\s*का|तक\s*की|kulla|keezh|se\s*kam|"
+                 r"ke\s*andar")
+BUDGET_RE = re.compile(rf"\b(?:{_EN_LIMIT})\s*:?\s*(?P<pre>{_CUR})?\s*{_AMOUNT}\s*(?P<post>{_CUR})?", re.I)
+_NATIVE_BUDGET_RE = re.compile(rf"(?P<pre>{_CUR})?\s*{_AMOUNT}\s*(?P<post>{_CUR})?\s*-?\s*(?:{_NATIVE_LIMIT})", re.I)
+# An amount with an explicit currency and no limit word ("a backpack for ₹5000", "INR 5000 tent") is also a budget.
+_PRICED_RE = re.compile(rf"(?P<pre>{_CUR})\s*{_AMOUNT}(?P<post>)|{_AMOUNT.replace('?P<', '?P<b_')}\s*(?P<b_post>{_INR}|\busd\b|\bdollars?\b)", re.I)
+# "under 2 kg", "within 3 days", "up to 4 people" are not budgets.
+_UNIT_AFTER = re.compile(r"\s*(?:kg|kgs|g|grams?|l|litres?|liters?|ml|oz|lbs?|mm|cm|km|m|days?|hours?|hrs?|minutes?|mins?|weeks?|"
+                         r"months?|years?|lumens?|people|persons?|person|°|degrees?|f|c|%|percent|items?|pieces?|pcs)\b", re.I)
+
+
+@dataclass(frozen=True)
+class Budget:
+    amount_minor: int          # in hundredths of the stated currency
+    currency: str | None       # "INR", "USD" or None (no currency stated)
+    span: tuple[int, int]      # where it was found in the message
+    limit_word: bool = True    # False for "a backpack for ₹5000" (an amount with a currency but no "under"/"below")
+
+
+def _currency_of(token: str | None) -> str | None:
+    if not token:
+        return None
+    return "USD" if re.fullmatch(_USD, token.strip(), re.I) else "INR"
+
+
+def parse_budget(message: str) -> Budget | None:
+    """The first spending limit in the message, with its currency if one was stated."""
+    for rx in (BUDGET_RE, _NATIVE_BUDGET_RE):
+        for m in rx.finditer(message):
+            currency = _currency_of(m.group("pre") or m.group("post"))
+            if currency is None and _UNIT_AFTER.match(message, m.end()):
+                continue
+            whole, frac, thousands = m.group("whole"), m.group("frac"), m.group("k")
+            units = int(whole.replace(",", "")) * (1000 if thousands else 1)
+            if not 0 < units <= 10_000_000:
+                continue
+            minor = units * 100 + (int(frac.ljust(2, "0")) if frac else 0)
+            return Budget(minor, currency, m.span())
+    for m in _PRICED_RE.finditer(message):
+        g = (lambda k: m.group(k) or m.group("b_" + k)) if m.group("whole") is None else m.group
+        token = m.group("pre") if m.group("whole") is not None else m.group("b_post")
+        units = int(g("whole").replace(",", "")) * (1000 if g("k") else 1)
+        if 0 < units <= 10_000_000:
+            return Budget(units * 100 + (int(g("frac").ljust(2, "0")) if g("frac") else 0), _currency_of(token), m.span(), False)
+    return None
 
 _KEYWORDS: dict[str, tuple[str, ...]] = {
     "order_status": ("my order", "order status", "track", "tracking", "where is my", "where's my", "package", "parcel",
@@ -21,9 +73,10 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
     "shipping": ("shipping", "ship ", "ships", "delivery", "deliver", "postage", "how long does it take", "expedited"),
     "returns": ("return", "refund", "exchange", "send back", "money back"),
     "warranty": ("warranty", "defect", "broken", "guarantee"),
-    "payment": ("payment", "pay with", "paypal", "apple pay", "credit card", "gift card"),
+    "payment": ("payment", "pay with", "pay by", "pay using", "paypal", "apple pay", "google pay", "credit card", "debit card", "gift card",
+                " upi", "cash on delivery", " cod ", "net banking", "netbanking", "wallet", "razorpay", "payment method"),
     "stock": ("in stock", "stock", "available", "availability", "sold out", "have any left", "inventory"),
-    "price": ("price", "cost", "how much", "cheap", "expensive", "budget", "under $", "$"),
+    "price": ("price", "cost", "how much", "cheap", "expensive", "budget", "under $", "$", "₹", " rs ", " rs.", "rupee", " inr "),
     "product": ("recommend", "looking for", "do you have", "do you sell", "need a", "need some", "suggest", "best", "show me", "tell me about"),
     "cart": ("my cart", "in my cart", "my basket", "in my basket", "cart total", "shopping cart"),
     "contact": ("human", "agent", "representative", "real person", "speak to someone", "talk to someone", "contact", "phone number", "email you", "hours"),
@@ -69,10 +122,6 @@ PRODUCT_LEXICON: dict[str, str] = {
     "பிரஸ்": "press", "प्रेस": "press", "டிரிப்பர்": "dripper", "ड्रिपर": "dripper",
     "கோப்பை": "mug", "மக்": "mug", "मग": "mug", "தேன்": "honey", "शहद": "honey",
 }
-_NATIVE_BUDGET_RE = re.compile(
-    r"\$?\s*(\d{1,5}(?:\.\d{1,2})?)\s*(?:டாலர்|डॉलर|dollars?)?\s*-?\s*"
-    r"(?:க்குள்|க்குக்?\s*கீழ்|க்குக்?\s*குறைவா|से\s*कम|के\s*अंदर|के\s*भीतर|तक\s*का|kulla|keezh|se\s*kam)", re.I)
-
 _STOPWORDS = set(
     """a an the and or but if of for to in on at by with from about as is are was were be been am do does did
     i me my mine you your we our us it its this that these those what which who whom how when where why can could
@@ -82,7 +131,7 @@ _STOPWORDS = set(
     items product products store shop order orders today now one ones help question under below less dollar dollars
     gift gifts idea ideas around cheaper max maximum most budget spend add put cart basket take compare comparison
     versus difference differences between better which similar alternative alternatives instead else options
-    other another cheapest affordable expensive lower""".split()
+    other another cheapest affordable expensive lower within rupee rupees inr usd anything everything""".split()
 ) | {w for words in ROMANIZED.values() for w in words}
 
 
@@ -188,6 +237,10 @@ CARE_KEYWORDS: dict[str, tuple[str, ...]] = {
                     "complaint", "complain",
                     "கோபம்", "ஏமாற்றம்", "மோசம்", "புகார்", "உதவவில்லை", "எரிச்சல்", "गुस्सा", "नाराज़", "नाराज", "बेकार", "शिकायत",
                     "परेशान", "निराश", "बहुत बुरा"),
+    # There is no ticket system: these get an honest "not available" plus the real support contact.
+    "ticket": ("support ticket", "ticket", "tickets", "raise a complaint", "file a complaint", "register a complaint", "lodge a complaint",
+               "support request", "case number", "case id", "ticket number", "complaint number",
+               "டிக்கெட்", "புகார் பதிவு", "புகார் எண்", "टिकट", "शिकायत दर्ज", "शिकायत नंबर", "complaint register"),
     "bulk": ("bulk", "wholesale", "business order", "corporate", "large order", "for my company", "for my office", "b2b",
              "resell", "reseller", "மொத்தமாக", "மொத்த ஆர்டர்", "நிறுவனத்துக்கு", "थोक", "बल्क", "कंपनी के लिए"),
     "reorder": ("order again", "reorder", "re-order", "buy again", "same as last time", "repeat my order", "repeat order",
@@ -263,7 +316,10 @@ def _care_matches(text: str) -> set[str]:
 
 def requested_quantity(text: str) -> int:
     """Quantity for an add-to-cart request ("add 2 headlamps", "add two"), defaulting to 1. Prices and order numbers are ignored."""
-    cleaned = ORDER_NUMBER_RE.sub(" ", BUDGET_RE.sub(" ", re.sub(r"\$\s*\d+(?:\.\d+)?", " ", text.lower())))
+    budget = parse_budget(text)
+    if budget:
+        text = text[:budget.span[0]] + " " + text[budget.span[1]:]
+    cleaned = ORDER_NUMBER_RE.sub(" ", re.sub(rf"(?:{_CUR})\s*\d[\d,]*(?:\.\d+)?", " ", text.lower(), flags=re.I))
     m = re.search(r"(?<![\w.])(\d{1,2})(?![\w.%-])", cleaned)
     if m:
         return max(1, int(m.group(1)))
@@ -278,7 +334,8 @@ class Intent:
     intents: set[str] = field(default_factory=set)
     order_number: str | None = None
     search_terms: list[str] = field(default_factory=list)
-    max_price_cents: int | None = None
+    max_price_cents: int | None = None   # budget amount in hundredths of `budget_currency` (or of the catalogue currency if None)
+    budget_currency: str | None = None   # "INR" / "USD" when the customer stated one
     raw: str = ""
     script_language: str | None = None
     quantity: int = 1
@@ -292,6 +349,19 @@ def normalise_order_number(text: str) -> str | None:
     return f"{m.group(1).upper()}-{m.group(2)}" if m else None
 
 
+# Everyday words → the words the catalogues actually use ("backpack" must also find the "Daytrip 22L Daypack").
+# Expansions are added after the customer's own words; matching is still against real product rows only.
+SEARCH_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "backpack": ("pack",), "rucksack": ("pack",), "knapsack": ("pack",), "daypack": ("pack",),
+    "flashlight": ("lamp",), "torch": ("lamp",), "headlight": ("lamp",), "headtorch": ("lamp",), "light": ("lamp",),
+    "shoe": ("boot",), "sneaker": ("boot",), "boots": ("boot",), "footwear": ("boot",),
+    "raincoat": ("jacket", "rain"), "coat": ("jacket",), "shell": ("jacket",), "jacket": ("shell",),
+    "mat": ("pad",), "mattress": ("pad",), "burner": ("stove",), "cooker": ("stove",), "shelter": ("tent",),
+    "cup": ("mug",), "mugs": ("mug",), "pourover": ("dripper", "pour-over"), "pour-over": ("dripper",), "filter": ("dripper",),
+    "mill": ("grinder",), "beans": ("bean",), "teapot": ("tea",), "kettle": ("gooseneck",),
+}
+
+
 def extract_search_terms(text: str) -> list[str]:
     words = re.findall(r"[a-zA-Z][a-zA-Z\-]{2,}", text.lower())
     # Tamil / Hindi product words map to English catalog terms (longest phrases first).
@@ -299,12 +369,20 @@ def extract_search_terms(text: str) -> list[str]:
     for phrase in sorted(PRODUCT_LEXICON, key=len, reverse=True):
         if phrase in text and PRODUCT_LEXICON[phrase] not in terms:
             terms.append(PRODUCT_LEXICON[phrase])
+    own: list[str] = []
     for w in words:
         if w in _STOPWORDS:
             continue
         stem = w[:-1] if w.endswith("s") and len(w) > 4 and not w.endswith("ss") else w
-        if stem not in terms:
-            terms.append(stem)
+        if stem not in terms and stem not in own:
+            own.append(stem)
+    terms += own
+    if "pour" in own and "over" in text.lower():
+        terms.append("dripper")
+    for w in own:
+        for extra in SEARCH_SYNONYMS.get(w, ()):
+            if extra not in terms:
+                terms.append(extra)
     return terms[:8]
 
 
@@ -330,7 +408,7 @@ def detect_intent(message: str) -> Intent:
         found.discard("cart")          # an action on the cart, not "what's in my cart"
     # Words about a problem with an order or the site are not product searches.
     if care & {"payment_issue", "refund_status", "account", "checkout_help", "tech_issue", "promotions", "invoice", "privacy",
-               "languages", "accessibility", "bulk", "frustration"} and not care & {"compare", "cheaper", "alternative", "add_to_cart", "care"}:
+               "languages", "accessibility", "bulk", "frustration", "ticket"} and not care & {"compare", "cheaper", "alternative", "add_to_cart", "care"}:
         found -= {"product", "price", "stock"} if not keyword_product else set()
     if "payment_issue" in care:
         found.discard("payment")       # a payment problem, not the "which cards do you accept" policy
@@ -338,8 +416,10 @@ def detect_intent(message: str) -> Intent:
     order_number = normalise_order_number(message)
     if order_number:
         found.add("order_status")
-    budget = BUDGET_RE.search(message) or _NATIVE_BUDGET_RE.search(message)
-    max_price_cents = round(float(budget.group(1)) * 100) if budget else None
+    budget = parse_budget(message)
+    if budget and not budget.limit_word and found & _POLICY_INTENTS:
+        budget = None                  # "is it $5 shipping?" quotes a fee, it is not a spending limit
+    max_price_cents = budget.amount_minor if budget else None
     if max_price_cents is not None:
         found.add("product")
     if "cart" in found:
@@ -347,6 +427,9 @@ def detect_intent(message: str) -> Intent:
         found -= {"product", "order_status"} if not order_number else set()
     # "delivery" inside an order question is about that order, not the shipping policy.
     if "order_status" in found and not any(k in text for k in ("shipping cost", "shipping policy", "how much is shipping")):
+        found.discard("shipping")
+    # "cash on delivery" is a payment method, not a shipping question.
+    if "cash on delivery" in text and not any(k in text for k in ("shipping", "ship ", "deliver to", "delivery time", "delivery charge")):
         found.discard("shipping")
     if found & {"price", "stock"}:
         found.add("product")
@@ -365,12 +448,12 @@ def detect_intent(message: str) -> Intent:
         found -= {"product", "price", "stock"}
         terms = []
     if care & {"payment_issue", "refund_status", "account", "checkout_help", "tech_issue", "promotions", "invoice", "privacy",
-               "languages", "accessibility", "bulk", "frustration", "order_late", "delivered_missing", "cancel", "modify_order",
+               "languages", "accessibility", "bulk", "frustration", "ticket", "order_late", "delivered_missing", "cancel", "modify_order",
                "wrong_item", "missing_item", "reorder", "damaged", "defective"} and not keyword_product \
             and not care & {"compare", "cheaper", "alternative", "add_to_cart", "care"}:
         found.discard("product")
         terms = [] if not care & {"damaged", "defective"} else terms
     found |= care
     return Intent(intents=found, order_number=order_number, search_terms=terms, max_price_cents=max_price_cents,
-                  raw=message.lower(), script_language=script, quantity=requested_quantity(message),
+                  budget_currency=budget.currency if budget else None, raw=message.lower(), script_language=script, quantity=requested_quantity(message),
                   sensitive=sensitive, keyword_product=keyword_product, refers_back=bool(_REFERS_BACK_RE.search(text)))

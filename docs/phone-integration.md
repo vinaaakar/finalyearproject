@@ -5,6 +5,26 @@
 Only the **simulator** exists. It runs the real call logic over HTTP text turns and labels every
 response `"simulated": true`. **No telephone network is involved, and no real call has been made.**
 
+The simulator answers unauthenticated callers, so it is only reachable when `APP_ENV=development` (or with an explicit
+`PHONE_SIMULATOR_ENABLED=true`); otherwise its endpoints return 404. Order-status verification (order number + shipping
+postal code) is limited across calls, not only within one call (`backend/app/phone/session.py`). Failed verifications are
+counted in a sliding 30-minute window at three levels, and verification is refused as soon as any one is reached:
+
+| Limit | Failures per 30 minutes | Purpose |
+|---|---|---|
+| Per caller, per order | 3 | stops one caller retrying codes for one order |
+| Per caller, any order | 5 | stops one caller sweeping many orders |
+| Per order, any caller | 20 | stops many callers sharing one order's guesses, while one caller alone cannot lock a customer out |
+
+While a limit is active, verification is refused **without looking the order up**, so the reply never reveals whether a
+guess was right; the refusal tells the caller to sign in on the website or email support. A successful verification clears
+only that caller's own per-order count. Within a single call, 3 failed attempts end the call. A caller can start at most
+10 calls per 30 minutes (further attempts get `429` with `Retry-After: 1800`). The caller is identified by the client
+address, taking `X-Forwarded-For` into account only from proxies listed in `TRUSTED_PROXIES`. Counters are in memory: they
+reset when the API restarts and are not shared between instances, so a multi-instance deployment needs a shared store. If
+the counter memory bound is reached while every tracked entry is an active lockout, verification is refused until entries
+expire (it never forgets an active lockout).
+
 ## Design
 
 ```

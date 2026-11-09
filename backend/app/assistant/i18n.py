@@ -82,10 +82,10 @@ T: dict[str, dict[str, str]] = {
 STATUS: dict[str, dict[str, str]] = {
     "ta": {"pending_payment": "பணம் செலுத்தக் காத்திருக்கிறது", "processing": "தயாராகிக் கொண்டிருக்கிறது", "shipped": "அனுப்பப்பட்டுவிட்டது",
            "out_for_delivery": "டெலிவரிக்காக வெளியே சென்றுள்ளது", "delivered": "டெலிவரி செய்யப்பட்டுவிட்டது", "cancelled": "ரத்து செய்யப்பட்டது",
-           "returned": "திருப்பி அனுப்பப்பட்டு பணம் திருப்பித் தரப்பட்டது"},
+           "returned": "திருப்பி அனுப்பப்பட்டது"},
     "hi": {"pending_payment": "भुगतान की प्रतीक्षा में है", "processing": "तैयार किया जा रहा है", "shipped": "भेज दिया गया है",
            "out_for_delivery": "डिलीवरी के लिए निकल चुका है", "delivered": "डिलीवर हो चुका है", "cancelled": "रद्द कर दिया गया है",
-           "returned": "लौटाया जा चुका है और रिफ़ंड हो गया है"},
+           "returned": "लौटाया जा चुका है"},
 }
 
 CATEGORIES: dict[str, dict[str, str]] = {

@@ -71,12 +71,10 @@ class CareDesk:
     @staticmethod
     def history_products(store: StoreId, history: list[dict[str, str]]) -> list[dict[str, Any]]:
         """Catalogue products named in recent turns, most recent turn first (in mention order within a turn)."""
-        catalog = repo.list_products(store, limit=100)
         found: list[dict[str, Any]] = []
         for turn in reversed((history or [])[-6:]):
-            text = turn["content"].lower()
-            hits = sorted((text.find(p["name"].lower()), p) for p in catalog if p["name"].lower() in text)
-            for _, p in hits:
+            # Matched in the database against this store's products only (no catalogue-size cap).
+            for p in repo.products_mentioned_in(store, turn["content"]):
                 if p["slug"] not in {f["slug"] for f in found}:
                     found.append(p)
             if found:
@@ -142,6 +140,15 @@ class CareDesk:
         if "bulk" in intents:
             out.body.append(i18n.t(lang, "bulk", email=email, hours=hours))
             out.actions.append(email_action)
+        if "ticket" in intents:
+            # There is no ticket system: say so plainly and give the real support route (never a fake ticket number).
+            out.skip.add("contact")
+            out.body.append(i18n.t(lang, "ticket_none", store=store_name, email=email, hours=hours))
+            summary = self._summary(history, message, intent)
+            if summary:
+                out.tail.append(i18n.t(lang, "human_summary", summary=summary).strip())
+            if email_action not in out.actions:
+                out.actions.append(email_action)
         if "tech_issue" in intents:
             out.body.append(i18n.t(lang, "tech_issue", email=email))
             out.actions.append(email_action)
@@ -150,7 +157,7 @@ class CareDesk:
         wants_human = "contact" in intents and _HUMAN_RE.search(intent.raw)
         if "frustration" in intents:
             out.lead.insert(0, i18n.t(lang, "frustration"))
-        if wants_human or "frustration" in intents:
+        if (wants_human or "frustration" in intents) and "ticket" not in intents:
             out.skip.add("contact")
             out.tail.append(i18n.t(lang, "human_no_agent", store=store_name, email=email, hours=hours))
             summary = self._summary(history, message, intent)
@@ -236,7 +243,8 @@ class CareDesk:
             lines = []
             for o in ([target] if target else orders):
                 if o["status"] == "returned":
-                    lines.append(i18n.t(lang, "refund_returned", number=o["order_number"]))
+                    # No refund records exist (truth.refund_evidence): never imply one was issued.
+                    lines.append(i18n.t(lang, "refund_returned", number=o["order_number"], email=email))
                     show(o)
                 elif o["status"] == "cancelled":
                     p = self._latest_payment(store, principal, o)
@@ -381,7 +389,9 @@ class CareDesk:
         found = repo.search_products_by_terms(store, intent.search_terms, limit=5) if intent.search_terms else []
         top = [p for p in found if p["score"] == found[0]["score"]] if found else []
         hist = self.history_products(store, history)
-        catalog = repo.list_products(store, limit=100)
+        # Same-category lookups go to the database per category (not a capped copy of the whole catalogue).
+        def in_category(cat: str) -> list[dict[str, Any]]:
+            return repo.list_products(store, category=cat, limit=500)
 
         def stock(p):
             if p["stock_qty"] <= 0:
@@ -414,7 +424,7 @@ class CareDesk:
                 out.body.append(i18n.t(lang, "cheaper_which" if "cheaper" in intents else "add_unknown"))
                 out.products = []
             else:
-                same = [p for p in catalog if p["category"] == ref["category"] and p["slug"] != ref["slug"] and p["stock_qty"] > 0]
+                same = [p for p in in_category(ref["category"]) if p["slug"] != ref["slug"] and p["stock_qty"] > 0]
                 if "cheaper" in intents:
                     # Same kind of product only: a cheaper backpack is not a cheaper tent.
                     cheaper = sorted((p for p in same if p["price_cents"] < ref["price_cents"]), key=lambda p: -p["price_cents"])
@@ -450,7 +460,7 @@ class CareDesk:
                     out.products = []
                 elif product["stock_qty"] <= 0:
                     out.body.append(i18n.t(lang, "add_out", name=product["name"]))
-                    alts = [p for p in catalog if p["category"] == product["category"] and p["stock_qty"] > 0]
+                    alts = [p for p in in_category(product["category"]) if p["stock_qty"] > 0]
                     out.body.append(i18n.t(lang, "alternatives", list=", ".join(
                         f"{p['name']} ({commerce.money(p['price_cents'])})" for p in alts[:3])).strip() if alts
                         else i18n.t(lang, "alt_none").strip())

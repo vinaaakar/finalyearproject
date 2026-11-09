@@ -66,6 +66,13 @@ class Settings:
     tts_voice: str = "Samantha"
     tts_voice_ta: str = "Vani"
     tts_voice_hi: str = "Lekha"
+    # The text phone SIMULATOR answers unauthenticated callers (order number + postal code), so it is only
+    # reachable in development unless PHONE_SIMULATOR_ENABLED=true is set explicitly.
+    phone_simulator_enabled: bool = False
+    # Reverse proxies whose X-Forwarded-For header is believed (exact IP addresses). Empty = use the peer address.
+    trusted_proxies: tuple[str, ...] = ()
+    # Interactive API docs (/docs, /redoc, /openapi.json): development only unless API_DOCS_ENABLED=true.
+    api_docs_enabled: bool = False
 
 
 def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_ENV_FILE) -> Settings:
@@ -188,6 +195,11 @@ def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_EN
         rate_limit_login_per_min=get_int("RATE_LIMIT_LOGIN_PER_MIN", "10"),
         rate_limit_default_per_min=get_int("RATE_LIMIT_DEFAULT_PER_MIN", "120"),
         phone_number_store_map=phone_map,
+        api_docs_enabled=merged.get("API_DOCS_ENABLED", "true" if app_env == "development" else "false").strip().lower()
+        in ("1", "true", "yes"),
+        trusted_proxies=tuple(p.strip() for p in merged.get("TRUSTED_PROXIES", "").split(",") if p.strip()),
+        phone_simulator_enabled=merged.get("PHONE_SIMULATOR_ENABLED", "true" if app_env == "development" else "false").strip().lower()
+        in ("1", "true", "yes"),
         payment_provider=payment_provider,
         password_reset_ttl_minutes=get_int("PASSWORD_RESET_TTL_MINUTES", "30"),
         email_delivery=email_delivery,
