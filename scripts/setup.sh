@@ -26,13 +26,9 @@ else
   echo "==> .env exists; leaving it unchanged"
 fi
 
-echo "==> Starting project Postgres container (avc_postgres on 127.0.0.1:5433)"
-docker compose up -d postgres
-for i in $(seq 1 40); do
-  [ "$(docker inspect -f '{{.State.Health.Status}}' avc_postgres 2>/dev/null)" = "healthy" ] && break
-  sleep 1
-done
-[ "$(docker inspect -f '{{.State.Health.Status}}' avc_postgres)" = "healthy" ] || { echo "!! Postgres did not become healthy" >&2; exit 1; }
+echo "==> Project Postgres container (avc_postgres on 127.0.0.1:5433)"
+# Never recreates an existing container; creating or starting one asks for approval first.
+ensure_postgres || { echo "!! Postgres is not available; setup stopped." >&2; exit 1; }
 
 echo "==> Python virtual environment (backend/.venv)"
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"

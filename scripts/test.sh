@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Backend tests (against the *_test databases) + production build of both storefronts.
+# Service-script safety tests + backend tests (against the *_test databases) + production build of both storefronts.
+# A healthy Postgres container is never touched (see ensure_postgres in _common.sh).
 source "$(dirname "$0")/_common.sh"
 cd "$ROOT"
-docker compose up -d postgres >/dev/null
-for i in $(seq 1 30); do
-  [ "$(docker inspect -f '{{.State.Health.Status}}' avc_postgres 2>/dev/null)" = "healthy" ] && break; sleep 1
-done
+echo "==> Service-script safety tests (mocked Docker; no real service is touched)"
+"$VENV/bin/python" -m pytest -q -p no:cacheprovider scripts/tests
+ensure_postgres || { echo "!! Postgres is not available; backend tests not run." >&2; exit 1; }
 echo "==> Backend tests"
 (cd backend && "$VENV/bin/python" -m pytest -q -W ignore::DeprecationWarning "$@")
 echo "==> Frontend build check"
