@@ -152,6 +152,14 @@ export function createApi(storeId) {
     order: (number) => request(`/orders/${encodeURIComponent(number)}`),
     adminOrders: () => request('/admin/orders'),
 
+    // ---- customer addresses (Amazon-style address book)
+    addresses: () => request('/addresses'),
+    defaultAddress: () => request('/addresses/default'),
+    createAddress: (data) => request('/addresses', { method: 'POST', body: data }),
+    updateAddress: (id, data) => request(`/addresses/${encodeURIComponent(id)}`, { method: 'PUT', body: data }),
+    setDefaultAddress: (id) => request(`/addresses/${encodeURIComponent(id)}/default`, { method: 'PUT' }),
+    deleteAddress: (id) => request(`/addresses/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
     // ---- staff fulfilment (agent accounts only; the server enforces it)
     staffOrders({ status = [], q = '', limit = 25, offset = 0 } = {}) {
       const params = new URLSearchParams();
@@ -208,11 +216,17 @@ export function createApi(storeId) {
     quote: async (shippingMethod, destination) => (await request('/checkout/quote', { method: 'POST',
       body: { shipping_method: shippingMethod, ...(destination ? { destination } : {}) } })).cart,
     addressOptions: () => request('/checkout/address-options'),
-    async checkout({ shipping, shippingMethod, expectedTotalCents, idempotencyKey }) {
+    // Saving the address is opt-in: save_address=true (with its options) is sent only when the customer chose it.
+    async checkout({ shipping, shippingMethod, expectedTotalCents, idempotencyKey, saveAddress = false, makeDefault = false, addressLabel = 'Home' }) {
       const r = await request('/checkout', {
         method: 'POST',
         headers: { 'Idempotency-Key': idempotencyKey },
-        body: { shipping, shipping_method: shippingMethod, expected_total_cents: expectedTotalCents },
+        body: {
+          shipping,
+          shipping_method: shippingMethod,
+          expected_total_cents: expectedTotalCents,
+          ...(saveAddress === true && { save_address: true, make_default: Boolean(makeDefault), address_label: addressLabel || 'Home' }),
+        },
       });
       cartChanged(null);
       return r;

@@ -1,7 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../StoreApp.jsx';
 import OrderCard from '../components/OrderCard.jsx';
+import AddressCard from '../components/AddressCard.jsx';
+import AddressForm from '../components/AddressForm.jsx';
 import { ErrorNotice, Field, fieldError, safeNext } from './AuthPages.jsx';
 
 function LoginForm({ next }) {
@@ -59,12 +61,23 @@ function LoginForm({ next }) {
 export default function AccountPage() {
   const { api, session } = useStore();
   const [orders, setOrders] = useState({ loading: true, list: [], error: null });
+  const [addresses, setAddresses] = useState({ loading: false, list: [], error: null });
+  const [editingAddress, setEditingAddress] = useState(null); // null, 'new', or address object
   const [params] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const next = safeNext(params.get('next'));
   // A confirmation passed by the page that just completed the action (e.g. registration), shown once.
   const [flash] = useState(() => location.state?.flash || null);
+
+  const loadAddresses = useCallback(() => {
+    if (!session || session.customer.role === 'agent' || !api.addresses) return;
+    setAddresses((prev) => ({ ...prev, loading: true, error: null }));
+    api.addresses().then(
+      (d) => setAddresses({ loading: false, list: d?.addresses || [], error: null }),
+      (e) => setAddresses({ loading: false, list: [], error: e.message })
+    );
+  }, [api, session]);
 
   useEffect(() => {
     if (session && next) navigate(next, { replace: true });
@@ -78,10 +91,33 @@ export default function AccountPage() {
       (d) => setOrders({ loading: false, list: d.orders, error: null }),
       (e) => setOrders({ loading: false, list: [], error: e.message }),
     );
-  }, [api, session]);
+    loadAddresses();
+  }, [api, session, loadAddresses]);
 
   if (!session) return <LoginForm next={next} />;
   const isAgent = session.customer.role === 'agent';
+
+  async function handleSaveAddress(data) {
+    if (editingAddress && editingAddress !== 'new' && editingAddress.id) {
+      await api.updateAddress(editingAddress.id, data);
+    } else {
+      await api.createAddress(data);
+    }
+    setEditingAddress(null);
+    loadAddresses();
+  }
+
+  async function handleSetDefault(id) {
+    await api.setDefaultAddress(id);
+    loadAddresses();
+  }
+
+  async function handleDelete(id) {
+    if (window.confirm('Are you sure you want to delete this address?')) {
+      await api.deleteAddress(id);
+      loadAddresses();
+    }
+  }
 
   return (
     <section className="page-section">
@@ -111,6 +147,60 @@ export default function AccountPage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {!isAgent && (
+        <div className="account-address-book" style={{ marginTop: '40px' }}>
+          <div className="section-head">
+            <h2>Address Book</h2>
+            {!editingAddress && (
+              <button
+                type="button"
+                className="btn btn-small btn-primary"
+                onClick={() => setEditingAddress('new')}
+              >
+                + Add address
+              </button>
+            )}
+          </div>
+
+          {editingAddress ? (
+            <AddressForm
+              initial={editingAddress === 'new' ? null : editingAddress}
+              onSave={handleSaveAddress}
+              onCancel={() => setEditingAddress(null)}
+              submitLabel={editingAddress === 'new' ? 'Save address' : 'Update address'}
+            />
+          ) : addresses.loading ? (
+            <p className="muted" aria-live="polite">Loading addresses…</p>
+          ) : addresses.error ? (
+            <p className="notice notice-error" role="alert">{addresses.error}</p>
+          ) : addresses.list.length === 0 ? (
+            <div className="card">
+              <p className="muted">No saved addresses yet. Save your address to check out faster next time.</p>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={() => setEditingAddress('new')}
+              >
+                Add your first address
+              </button>
+            </div>
+          ) : (
+            <div className="address-grid">
+              {addresses.list.map((addr) => (
+                <AddressCard
+                  key={addr.id}
+                  address={addr}
+                  mode="manage"
+                  onEdit={(a) => setEditingAddress(a)}
+                  onSetDefault={handleSetDefault}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </section>
   );

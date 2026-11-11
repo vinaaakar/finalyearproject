@@ -5,6 +5,7 @@ import { useStore } from '../StoreApp.jsx';
 import { CartSummary, PriceNotice } from './CartPage.jsx';
 import { ErrorNotice } from './AuthPages.jsx';
 import ProductImage from '../components/ProductImage.jsx';
+import AddressCard from '../components/AddressCard.jsx';
 
 // Country-aware checkout. The server describes every country the store's checkout offers (GET /checkout/address-options:
 // regions with their names, postal format, phone, labels, currency, whether delivery rates and prices exist) and prices
@@ -28,10 +29,44 @@ export default function CheckoutPage() {
   const [optionsError, setOptionsError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [countries, setCountries] = useState(null);   // the countries this store ships to, with their rules
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [addressMode, setAddressMode] = useState('form'); // 'card' or 'form'
+  const [saveAddress, setSaveAddress] = useState(false);   // opt-in: the customer must tick "Save this address"
+  const [makeDefault, setMakeDefault] = useState(false);
+  const [addressLabel, setAddressLabel] = useState('Home');
   // One key per review: resubmitting (double click, retry after a network error) cannot create a second order.
   const idemKey = useRef(newIdempotencyKey());
   const set = (k) => (e) => setAddress((a) => ({ ...a, [k]: e.target.value }));
   const country = countries?.find((c) => c.code === address.country) || null;
+
+  const loadAddresses = useCallback(() => {
+    if (!session || !api.addresses) return;
+    api.addresses().then(
+      (d) => {
+        const list = d?.addresses || [];
+        setSavedAddresses(list);
+        if (list.length > 0) {
+          const def = list.find((a) => a.is_default) || list[0];
+          setAddress({
+            full_name: def.full_name,
+            line1: def.line1,
+            line2: def.line2 || '',
+            city: def.city,
+            region: def.region,
+            postal_code: def.postal_code,
+            phone: def.phone || '',
+            country: def.country || 'IN',
+          });
+          setAddressLabel(def.label || 'Home');
+          setAddressMode('card');
+        } else {
+          setAddressMode('form');
+        }
+      },
+      () => setAddressMode('form')
+    );
+  }, [api, session]);
+  useEffect(() => { loadAddresses(); }, [loadAddresses]);
 
   const loadOptions = useCallback(() => {
     if (!session) return () => {};
@@ -104,6 +139,56 @@ export default function CheckoutPage() {
     setMethod('standard');
   }
 
+  function selectAddress(addr) {
+    setAddress({
+      full_name: addr.full_name,
+      line1: addr.line1,
+      line2: addr.line2 || '',
+      city: addr.city,
+      region: addr.region,
+      postal_code: addr.postal_code,
+      phone: addr.phone || '',
+      country: addr.country || 'IN',
+    });
+    setAddressLabel(addr.label || 'Home');
+  }
+
+  function deliverTo(addr) {
+    selectAddress(addr);
+    setError(null);
+    idemKey.current = newIdempotencyKey();
+    setStep('review');
+  }
+
+  function editCard(addr) {
+    selectAddress(addr);
+    setAddressLabel(addr.label || 'Home');
+    setMakeDefault(Boolean(addr.is_default));
+    setAddressMode('form');
+  }
+
+  function addNewAddress() {
+    setAddress({ ...EMPTY, full_name: session?.customer.name || '', country: countries?.[0]?.code || 'IN' });
+    setSaveAddress(false);
+    setMakeDefault(false);
+    setAddressLabel('Home');
+    setAddressMode('form');
+  }
+
+  async function handleSetDefault(id) {
+    if (!api.setDefaultAddress) return;
+    await api.setDefaultAddress(id);
+    loadAddresses();
+  }
+
+  async function handleDelete(id) {
+    if (!api.deleteAddress) return;
+    if (window.confirm('Delete this saved address?')) {
+      await api.deleteAddress(id);
+      loadAddresses();
+    }
+  }
+
   function toReview(e) {
     e.preventDefault();
     setError(null);
@@ -120,7 +205,17 @@ export default function CheckoutPage() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.checkout({ shipping: shippingBody(), shippingMethod: method, expectedTotalCents: quote.total_cents, idempotencyKey: idemKey.current });
+      const r = await api.checkout({
+        shipping: shippingBody(),
+        shippingMethod: method,
+        expectedTotalCents: quote.total_cents,
+        idempotencyKey: idemKey.current,
+        // Opt-in only: the box is unchecked by default, and is shown only on the address form (a saved card is
+        // already saved), so nothing is sent unless the customer ticked it on the form they used.
+        saveAddress: addressMode === 'form' && saveAddress === true,
+        makeDefault: addressMode === 'form' && saveAddress === true && makeDefault,
+        addressLabel: addressLabel || 'Home',
+      });
       navigate(`/orders/${r.order.order_number}/pay`, { replace: true });
     } catch (e) {
       setError(e);
@@ -157,71 +252,153 @@ export default function CheckoutPage() {
       <div className="cart-layout">
         <div>
           {step === 'shipping' ? (
-            <form className="card checkout-form" onSubmit={toReview}>
-              <h2>Shipping address</h2>
-              {countries.length > 1 ? (
-                <>
-                  <label htmlFor="ship-country">Country / Region</label>
-                  <select id="ship-country" autoComplete="shipping country" required value={address.country} onChange={changeCountry}>
-                    {countries.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
-                  </select>
-                </>
-              ) : (
-                <p className="checkout-country" data-testid="ship-country">Delivering to <strong>{country.name}</strong></p>
-              )}
-              <label htmlFor="ship-name">Full name</label>
-              <input id="ship-name" autoComplete="shipping name" required maxLength={100} value={address.full_name} onChange={set('full_name')} />
-              <label htmlFor="ship-line1">{country.line1_label}</label>
-              <input id="ship-line1" autoComplete="shipping address-line1" required maxLength={120} value={address.line1} onChange={set('line1')} />
-              <label htmlFor="ship-line2">{country.line2_label}</label>
-              <input id="ship-line2" autoComplete="shipping address-line2" maxLength={120} value={address.line2} onChange={set('line2')} />
-              <div className="form-row">
-                <div>
-                  <label htmlFor="ship-city">{country.city_label}</label>
-                  <input id="ship-city" autoComplete="shipping address-level2" required maxLength={80} value={address.city} onChange={set('city')} />
+            addressMode === 'card' && savedAddresses.length > 0 ? (
+              <div className="card checkout-saved-addresses" data-testid="checkout-saved-addresses">
+                <div className="section-head" style={{ marginTop: 0 }}>
+                  <h2>Select delivery address</h2>
+                  <button type="button" className="btn btn-small" onClick={addNewAddress}>
+                    + Add a new address
+                  </button>
                 </div>
-                <div>
-                  <label htmlFor="ship-region">{country.region_label}</label>
-                  <select id="ship-region" autoComplete="shipping address-level1" required value={address.region} onChange={set('region')}>
-                    <option value="">Select…</option>
-                    {country.regions.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
-                  </select>
+                <p className="muted">Choose a delivery address from your saved addresses below.</p>
+
+                <div className="address-grid">
+                  {savedAddresses.map((addr) => {
+                    const isSelected =
+                      address.line1 === addr.line1 &&
+                      address.postal_code === addr.postal_code &&
+                      address.city === addr.city;
+                    return (
+                      <AddressCard
+                        key={addr.id}
+                        address={addr}
+                        mode="checkout"
+                        isSelected={isSelected}
+                        onSelect={deliverTo}
+                        onEdit={editCard}
+                        onSetDefault={handleSetDefault}
+                        onDelete={handleDelete}
+                      />
+                    );
+                  })}
                 </div>
-                <div>
-                  <label htmlFor="ship-zip">{country.postal_label}</label>
-                  {/* key: a new input per country, so no previous country's pattern or value survives a switch */}
-                  <input key={country.code} id="ship-zip" autoComplete="shipping postal-code" inputMode="numeric" required
-                    pattern={htmlPattern(country.postal_pattern)} title={`${country.postal_label}, for example ${country.postal_example}`}
-                    maxLength={country.code === 'IN' ? 6 : 10} value={address.postal_code} onChange={set('postal_code')} />
+
+                <PriceNotice cart={view} storeName={config.name} />
+                {!shippingAvailable ? shippingNotice : (
+                  <fieldset className="ship-methods">
+                    <legend>Shipping method</legend>
+                    {view.shipping_options.map((o) => (
+                      <label key={o.method} className="radio">
+                        <input type="radio" name="ship-method" value={o.method} checked={method === o.method} onChange={() => setMethod(o.method)} />
+                        {o.label}{priced && <> — {o.cents === 0 ? 'Free' : o.price}</>}
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                <ErrorNotice error={error} />
+                <div className="detail-actions" style={{ marginTop: '16px' }}>
+                  <button type="button" className="btn btn-primary" onClick={toReview} disabled={stockProblems}>
+                    Deliver to this address
+                  </button>
+                  <button type="button" className="btn" onClick={addNewAddress}>
+                    Add a new address
+                  </button>
                 </div>
               </div>
-              {country.phone && (
-                <>
-                  <label htmlFor="ship-phone">{country.phone.required ? 'Mobile number' : 'Phone number (optional)'}</label>
-                  <div className="phone-field">
-                    <span className="phone-prefix" aria-hidden="true">{country.phone.dial_code}</span>
-                    <input id="ship-phone" type="tel" autoComplete="shipping tel-national" inputMode="tel" required={country.phone.required}
-                      maxLength={20} pattern="[+0-9 ().\-]{10,20}" aria-describedby="ship-phone-help"
-                      title={`10-digit number, for example ${country.phone.example}`} value={address.phone} onChange={set('phone')} />
+            ) : (
+              <form className="card checkout-form" onSubmit={toReview}>
+                <div className="section-head" style={{ marginTop: 0 }}>
+                  <h2>Shipping address</h2>
+                  {savedAddresses.length > 0 && (
+                    <button type="button" className="btn btn-small" onClick={() => setAddressMode('card')}>
+                      ← Use a saved address
+                    </button>
+                  )}
+                </div>
+                {countries.length > 1 ? (
+                  <>
+                    <label htmlFor="ship-country">Country / Region</label>
+                    <select id="ship-country" autoComplete="shipping country" required value={address.country} onChange={changeCountry}>
+                      {countries.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+                    </select>
+                  </>
+                ) : (
+                  <p className="checkout-country" data-testid="ship-country">Delivering to <strong>{country.name}</strong></p>
+                )}
+                <label htmlFor="ship-name">Full name</label>
+                <input id="ship-name" autoComplete="shipping name" required maxLength={100} value={address.full_name} onChange={set('full_name')} />
+                <label htmlFor="ship-line1">{country.line1_label}</label>
+                <input id="ship-line1" autoComplete="shipping address-line1" required maxLength={120} value={address.line1} onChange={set('line1')} />
+                <label htmlFor="ship-line2">{country.line2_label}</label>
+                <input id="ship-line2" autoComplete="shipping address-line2" maxLength={120} value={address.line2} onChange={set('line2')} />
+                <div className="form-row">
+                  <div>
+                    <label htmlFor="ship-city">{country.city_label}</label>
+                    <input id="ship-city" autoComplete="shipping address-level2" required maxLength={80} value={address.city} onChange={set('city')} />
                   </div>
-                  <p id="ship-phone-help" className="field-help">Country code {country.phone.dial_code}. For example {country.phone.example}.</p>
-                </>
-              )}
-              <PriceNotice cart={view} storeName={config.name} />
-              {!shippingAvailable ? shippingNotice : (
-                <fieldset className="ship-methods">
-                  <legend>Shipping method</legend>
-                  {view.shipping_options.map((o) => (
-                    <label key={o.method} className="radio">
-                      <input type="radio" name="ship-method" value={o.method} checked={method === o.method} onChange={() => setMethod(o.method)} />
-                      {o.label}{priced && <> — {o.cents === 0 ? 'Free' : o.price}</>}
+                  <div>
+                    <label htmlFor="ship-region">{country.region_label}</label>
+                    <select id="ship-region" autoComplete="shipping address-level1" required value={address.region} onChange={set('region')}>
+                      <option value="">Select…</option>
+                      {country.regions.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="ship-zip">{country.postal_label}</label>
+                    {/* key: a new input per country, so no previous country's pattern or value survives a switch */}
+                    <input key={country.code} id="ship-zip" autoComplete="shipping postal-code" inputMode="numeric" required
+                      pattern={htmlPattern(country.postal_pattern)} title={`${country.postal_label}, for example ${country.postal_example}`}
+                      maxLength={country.code === 'IN' ? 6 : 10} value={address.postal_code} onChange={set('postal_code')} />
+                  </div>
+                </div>
+                {country.phone && (
+                  <>
+                    <label htmlFor="ship-phone">{country.phone.required ? 'Mobile number' : 'Phone number (optional)'}</label>
+                    <div className="phone-field">
+                      <span className="phone-prefix" aria-hidden="true">{country.phone.dial_code}</span>
+                      <input id="ship-phone" type="tel" autoComplete="shipping tel-national" inputMode="tel" required={country.phone.required}
+                        maxLength={20} pattern="[+0-9 ().\-]{10,20}" aria-describedby="ship-phone-help"
+                        title={`10-digit number, for example ${country.phone.example}`} value={address.phone} onChange={set('phone')} />
+                    </div>
+                    <p id="ship-phone-help" className="field-help">Country code {country.phone.dial_code}. For example {country.phone.example}.</p>
+                  </>
+                )}
+                <div className="checkout-save-options">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={saveAddress}
+                      onChange={(e) => setSaveAddress(e.target.checked)}
+                    />
+                    <span>Save this address to your account</span>
+                  </label>
+                  {saveAddress && (
+                    <label className="checkbox-label" style={{ marginLeft: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={makeDefault}
+                        onChange={(e) => setMakeDefault(e.target.checked)}
+                      />
+                      <span>Make this my default address</span>
                     </label>
-                  ))}
-                </fieldset>
-              )}
-              <ErrorNotice error={error} />
-              <button className="btn btn-primary" type="submit" disabled={stockProblems}>Review order</button>
-            </form>
+                  )}
+                </div>
+                <PriceNotice cart={view} storeName={config.name} />
+                {!shippingAvailable ? shippingNotice : (
+                  <fieldset className="ship-methods">
+                    <legend>Shipping method</legend>
+                    {view.shipping_options.map((o) => (
+                      <label key={o.method} className="radio">
+                        <input type="radio" name="ship-method" value={o.method} checked={method === o.method} onChange={() => setMethod(o.method)} />
+                        {o.label}{priced && <> — {o.cents === 0 ? 'Free' : o.price}</>}
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                <ErrorNotice error={error} />
+                <button className="btn btn-primary" type="submit" disabled={stockProblems}>Review order</button>
+              </form>
+            )
           ) : (
             <div className="card">
               <h2>Review your order</h2>

@@ -355,3 +355,212 @@ def get_shipping_rates(store: StoreId) -> dict[str, Any]:
         return conn.execute(
             "SELECT currency, standard_shipping_cents, free_shipping_min_cents, expedited_shipping_cents FROM store_profile WHERE id = 1"
         ).fetchone() or {"currency": "USD", "standard_shipping_cents": 0, "free_shipping_min_cents": None, "expedited_shipping_cents": None}
+
+
+# ---- customer saved addresses (address book) ----------------------------------------------------
+_SAVED_ADDRESS_COLS = (
+    "id, customer_id, label, full_name, line1, line2, city, region, postal_code, country, phone, is_default, created_at, updated_at"
+)
+
+
+def list_addresses(store: StoreId, customer_id: int) -> list[dict[str, Any]]:
+    with store_connection(store) as conn:
+        return conn.execute(
+            f"SELECT {_SAVED_ADDRESS_COLS} FROM customer_addresses WHERE customer_id = %s "
+            "ORDER BY is_default DESC, updated_at DESC, id DESC",
+            [customer_id],
+        ).fetchall()
+
+
+def get_address(store: StoreId, customer_id: int, address_id: int) -> dict[str, Any] | None:
+    with store_connection(store) as conn:
+        return conn.execute(
+            f"SELECT {_SAVED_ADDRESS_COLS} FROM customer_addresses WHERE id = %s AND customer_id = %s",
+            [address_id, customer_id],
+        ).fetchone()
+
+
+def get_default_address(store: StoreId, customer_id: int) -> dict[str, Any] | None:
+    with store_connection(store) as conn:
+        return conn.execute(
+            f"SELECT {_SAVED_ADDRESS_COLS} FROM customer_addresses WHERE customer_id = %s AND is_default = TRUE",
+            [customer_id],
+        ).fetchone()
+
+
+def _find_matching_address(conn, customer_id: int, addr: dict[str, Any]) -> dict[str, Any] | None:
+    return conn.execute(
+        f"SELECT {_SAVED_ADDRESS_COLS} FROM customer_addresses "
+        "WHERE customer_id = %s "
+        "AND lower(trim(full_name)) = lower(trim(%s)) "
+        "AND lower(trim(line1)) = lower(trim(%s)) "
+        "AND lower(trim(coalesce(line2, ''))) = lower(trim(coalesce(%s, ''))) "
+        "AND lower(trim(city)) = lower(trim(%s)) "
+        "AND upper(trim(region)) = upper(trim(%s)) "
+        "AND upper(replace(postal_code, ' ', '')) = upper(replace(%s, ' ', '')) "
+        "AND upper(trim(country)) = upper(trim(%s)) "
+        "AND coalesce(phone, '') = coalesce(%s, '')",
+        [
+            customer_id,
+            addr["full_name"],
+            addr["line1"],
+            addr.get("line2") or "",
+            addr["city"],
+            addr["region"],
+            addr["postal_code"],
+            addr.get("country", "IN"),
+            addr.get("phone") or "",
+        ],
+    ).fetchone()
+
+
+def save_or_update_address(
+    store: StoreId,
+    customer_id: int,
+    addr: dict[str, Any],
+    make_default: bool = False,
+    label: str = "Home",
+) -> dict[str, Any]:
+    """Saves a shipping address to the customer's address book without creating duplicates.
+    If an exact duplicate already exists, updates default status if requested; otherwise inserts a new row.
+    If the customer has no other addresses, it automatically becomes the default."""
+    with store_connection(store) as conn, conn.transaction():
+        match = _find_matching_address(conn, customer_id, addr)
+        has_addresses = conn.execute("SELECT 1 FROM customer_addresses WHERE customer_id = %s LIMIT 1", [customer_id]).fetchone() is not None
+        should_be_default = make_default or not has_addresses
+
+        if match is not None:
+            if should_be_default and not match["is_default"]:
+                conn.execute("UPDATE customer_addresses SET is_default = FALSE WHERE customer_id = %s", [customer_id])
+                conn.execute(
+                    "UPDATE customer_addresses SET is_default = TRUE, updated_at = now() WHERE id = %s",
+                    [match["id"]],
+                )
+                match["is_default"] = True
+            return match
+
+        if should_be_default:
+            conn.execute("UPDATE customer_addresses SET is_default = FALSE WHERE customer_id = %s", [customer_id])
+
+        row = conn.execute(
+            f"INSERT INTO customer_addresses (customer_id, label, full_name, line1, line2, city, region, postal_code, country, phone, is_default) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_SAVED_ADDRESS_COLS}",
+            [
+                customer_id,
+                label or "Home",
+                addr["full_name"],
+                addr["line1"],
+                addr.get("line2") or None,
+                addr["city"],
+                addr["region"],
+                addr["postal_code"],
+                addr.get("country", "IN"),
+                addr.get("phone"),
+                should_be_default,
+            ],
+        ).fetchone()
+        return row
+
+
+def create_address(
+    store: StoreId,
+    customer_id: int,
+    addr: dict[str, Any],
+    is_default: bool = False,
+    label: str = "Home",
+) -> dict[str, Any]:
+    with store_connection(store) as conn, conn.transaction():
+        has_addresses = conn.execute("SELECT 1 FROM customer_addresses WHERE customer_id = %s LIMIT 1", [customer_id]).fetchone() is not None
+        should_be_default = is_default or not has_addresses
+        if should_be_default:
+            conn.execute("UPDATE customer_addresses SET is_default = FALSE WHERE customer_id = %s", [customer_id])
+        return conn.execute(
+            f"INSERT INTO customer_addresses (customer_id, label, full_name, line1, line2, city, region, postal_code, country, phone, is_default) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_SAVED_ADDRESS_COLS}",
+            [
+                customer_id,
+                label or "Home",
+                addr["full_name"],
+                addr["line1"],
+                addr.get("line2") or None,
+                addr["city"],
+                addr["region"],
+                addr["postal_code"],
+                addr.get("country", "IN"),
+                addr.get("phone"),
+                should_be_default,
+            ],
+        ).fetchone()
+
+
+def update_address(
+    store: StoreId,
+    customer_id: int,
+    address_id: int,
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    with store_connection(store) as conn, conn.transaction():
+        existing = conn.execute(
+            f"SELECT {_SAVED_ADDRESS_COLS} FROM customer_addresses WHERE id = %s AND customer_id = %s FOR UPDATE",
+            [address_id, customer_id],
+        ).fetchone()
+        if existing is None:
+            return None
+
+        is_default = updates.get("is_default")
+        if is_default is True and not existing["is_default"]:
+            conn.execute("UPDATE customer_addresses SET is_default = FALSE WHERE customer_id = %s", [customer_id])
+
+        fields = ["updated_at = now()"]
+        params = []
+        for col in ("label", "full_name", "line1", "city", "region", "postal_code", "country", "phone"):
+            if col in updates and updates[col] is not None:
+                fields.append(f"{col} = %s")
+                params.append(updates[col])
+        if "line2" in updates:
+            fields.append("line2 = %s")
+            params.append(updates["line2"])
+        if "is_default" in updates and updates["is_default"] is not None:
+            fields.append("is_default = %s")
+            params.append(updates["is_default"])
+
+        params.extend([address_id, customer_id])
+        return conn.execute(
+            f"UPDATE customer_addresses SET {', '.join(fields)} WHERE id = %s AND customer_id = %s RETURNING {_SAVED_ADDRESS_COLS}",
+            params,
+        ).fetchone()
+
+
+
+def set_default_address(store: StoreId, customer_id: int, address_id: int) -> bool:
+    with store_connection(store) as conn, conn.transaction():
+        exists = conn.execute(
+            "SELECT 1 FROM customer_addresses WHERE id = %s AND customer_id = %s",
+            [address_id, customer_id],
+        ).fetchone()
+        if not exists:
+            return False
+        conn.execute("UPDATE customer_addresses SET is_default = FALSE WHERE customer_id = %s", [customer_id])
+        conn.execute(
+            "UPDATE customer_addresses SET is_default = TRUE, updated_at = now() WHERE id = %s AND customer_id = %s",
+            [address_id, customer_id],
+        )
+        return True
+
+
+def delete_address(store: StoreId, customer_id: int, address_id: int) -> bool:
+    with store_connection(store) as conn, conn.transaction():
+        row = conn.execute(
+            "DELETE FROM customer_addresses WHERE id = %s AND customer_id = %s RETURNING is_default",
+            [address_id, customer_id],
+        ).fetchone()
+        if not row:
+            return False
+        if row["is_default"]:
+            remaining = conn.execute(
+                "SELECT id FROM customer_addresses WHERE customer_id = %s ORDER BY updated_at DESC, id DESC LIMIT 1",
+                [customer_id],
+            ).fetchone()
+            if remaining:
+                conn.execute("UPDATE customer_addresses SET is_default = TRUE, updated_at = now() WHERE id = %s", [remaining["id"]])
+        return True

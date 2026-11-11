@@ -26,7 +26,7 @@ from .logging_config import configure_logging
 from .notify import EmailSender, build_sender
 from .payments.base import get_provider
 from .phone.session import CallManager
-from .routers import account, care, cart, catalog, chat, checkout, voice_phone, staff
+from .routers import account, addresses, care, cart, catalog, chat, checkout, voice_phone, staff
 from .speech.adapters import build_stt, build_tts
 from .stores import StoreId
 
@@ -41,7 +41,7 @@ def _error(status: int, code: str, message: str, headers: dict | None = None, de
 
 
 # Responses that may carry personal data must never be stored by browsers or shared caches.
-_PRIVATE_PATH = re.compile(r"/(auth|me|orders|admin|cart|checkout|chat|payments|speech|phone)(/|$)")
+_PRIVATE_PATH = re.compile(r"/(auth|me|orders|admin|cart|checkout|chat|payments|speech|phone|addresses)(/|$)")
 _DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 
@@ -214,6 +214,7 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
 
     app.include_router(catalog.router)
     app.include_router(account.router)
+    app.include_router(addresses.router)
     app.include_router(cart.router)
     app.include_router(checkout.router)
     app.include_router(chat.router)

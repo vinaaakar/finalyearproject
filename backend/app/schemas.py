@@ -164,6 +164,7 @@ class ShippingAddress(Strict):
     postal_code: str = Field(pattern=r"^\d{5}(-\d{4})?$|^\d{6}$", description="US ZIP / ZIP+4 or Indian PIN")
     country: Literal["US", "IN"] = "US"
     phone: str | None = Field(default=None, max_length=20, pattern=r"^[+0-9 ().\-]{7,20}$")
+    label: str | None = Field(default=None, max_length=50)
 
     @field_validator("full_name", "line1", "line2", "city")
     @classmethod
@@ -189,6 +190,63 @@ class ShippingAddress(Strict):
         return v.upper()
 
 
+class AddressCreate(Strict):
+    label: str = Field(default="Home", min_length=1, max_length=50)
+    full_name: str = Field(min_length=1, max_length=100)
+    line1: str = Field(min_length=1, max_length=120)
+    line2: str | None = Field(default=None, max_length=120)
+    city: str = Field(min_length=1, max_length=80)
+    region: str = Field(pattern=r"^[A-Za-z]{2}$")
+    postal_code: str = Field(pattern=r"^\d{5}(-\d{4})?$|^\d{6}$")
+    country: Literal["US", "IN"] = "IN"
+    phone: str | None = Field(default=None, max_length=20, pattern=r"^[+0-9 ().\-]{7,20}$")
+    is_default: bool = False
+
+    @field_validator("label", "full_name", "line1", "line2", "city")
+    @classmethod
+    def clean(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _clean_text(v)
+
+    @field_validator("label", "full_name", "line1", "city")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v:
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("region")
+    @classmethod
+    def upper_region(cls, v: str) -> str:
+        return v.upper()
+
+
+class AddressUpdate(Strict):
+    label: str | None = Field(default=None, min_length=1, max_length=50)
+    full_name: str | None = Field(default=None, min_length=1, max_length=100)
+    line1: str | None = Field(default=None, min_length=1, max_length=120)
+    line2: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, min_length=1, max_length=80)
+    region: str | None = Field(default=None, pattern=r"^[A-Za-z]{2}$")
+    postal_code: str | None = Field(default=None, pattern=r"^\d{5}(-\d{4})?$|^\d{6}$")
+    country: Literal["US", "IN"] | None = None
+    phone: str | None = Field(default=None, max_length=20, pattern=r"^[+0-9 ().\-]{7,20}$")
+    is_default: bool | None = None
+
+    @field_validator("label", "full_name", "line1", "line2", "city")
+    @classmethod
+    def clean(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _clean_text(v)
+
+    @field_validator("region")
+    @classmethod
+    def upper_region(cls, v: str | None) -> str | None:
+        return v.upper() if v else None
+
+
 ShippingMethod = Literal["standard", "expedited"]
 
 
@@ -208,6 +266,11 @@ class CheckoutRequest(Strict):
     shipping_method: ShippingMethod = "standard"
     # The total the customer reviewed. If the server's total differs, checkout stops and asks for a new review.
     expected_total_cents: int = Field(ge=0, le=10_000_000)
+    # Opt-in: the address is copied to the customer's address book only when the customer asks for it.
+    save_address: bool = False
+    make_default: bool = False
+    address_label: str = Field(default="Home", min_length=1, max_length=50)
+
 
 
 class SandboxCompleteRequest(Strict):

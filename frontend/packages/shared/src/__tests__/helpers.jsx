@@ -32,6 +32,12 @@ export function makeApi(overrides = {}) {
   return {
     order: vi.fn(), paymentStatus: vi.fn(), startPayment: vi.fn(), completeSandboxPayment: vi.fn(), verifyPayment: vi.fn(),
     cancelOrder: vi.fn(), quote: vi.fn(), checkout: vi.fn(), chat: vi.fn(), addToCart: vi.fn(),
+    addresses: vi.fn().mockResolvedValue({ addresses: [] }),
+    defaultAddress: vi.fn().mockResolvedValue({ address: null }),
+    createAddress: vi.fn().mockResolvedValue({ address: {} }),
+    updateAddress: vi.fn().mockResolvedValue({ address: {} }),
+    setDefaultAddress: vi.fn().mockResolvedValue({ ok: true }),
+    deleteAddress: vi.fn().mockResolvedValue(null),
     speechCapabilities: vi.fn().mockResolvedValue({}), synthesize: vi.fn(), transcribe: vi.fn(),
     ...overrides,
   };

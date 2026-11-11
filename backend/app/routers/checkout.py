@@ -3,6 +3,7 @@ confirmed with the payment provider, never taken from the client."""
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request, Response
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/api/stores/{store_id}", tags=["checkout"], dependenc
 
 OrderNumber = Annotated[str, Path(pattern=r"^[A-Za-z]{2}-\d{5}$")]
 Customer = Annotated[Principal, Depends(require_customer)]
+log = logging.getLogger("app.checkout")
 
 
 @router.get("/checkout/address-options")
@@ -69,6 +71,21 @@ def checkout(
                                           body.shipping_method, body.expected_total_cents, rates=rates)
     if not created:
         response.status_code = 200
+    if body.save_address and principal.customer_id:
+        # Optional, best-effort, and in its own transaction: the order above is already committed, so a failure here
+        # must not turn a successful checkout into an error. Only the error type is logged — never the message,
+        # traceback or address, which can carry the customer's name, address, PIN code or phone.
+        try:
+            repo.save_or_update_address(
+                store_id,
+                principal.customer_id,
+                commerce.validate_address(store_id, a.model_dump()),
+                make_default=body.make_default,
+                label=a.label or body.address_label or "Home",
+            )
+        except Exception as e:
+            log.warning("saving checkout address failed; order kept store=%s order=%s error=%s",
+                        store_id.value, order["order_number"], type(e).__name__)
     return {"order": public_order(order), "created": created}
 
 
