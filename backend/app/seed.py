@@ -12,12 +12,15 @@ from datetime import date, timedelta
 import psycopg
 
 from .config import load_settings
+from .assistant.truth import PAYMENT_CAPABILITY
 from .policy_translations import POLICY_TRANSLATIONS
 from .security import hash_password
 from .stores import StoreId
 
 DEMO_PASSWORDS = {StoreId.STORE_A: "TrailDemo!2026", StoreId.STORE_B: "BrewDemo!2026"}
 AGENT_PASSWORD = "AgentDemo!2026"
+# Only a sandbox payment provider exists, so the payment policy states exactly that (no card/wallet/gift-card claims).
+_PAY = PAYMENT_CAPABILITY["sandbox"]
 
 SEED: dict[StoreId, dict] = {
     StoreId.STORE_A: {
@@ -28,11 +31,10 @@ SEED: dict[StoreId, dict] = {
             ("shipping", "Free standard shipping over $75; standard delivery takes 3–5 business days.",
              "Standard shipping is $6.95 under $75 and free over $75. Expedited 2-day shipping is $14.95. Orders placed before 1pm MT ship the same business day. We ship to the contiguous US only."),
             ("returns", "Unused gear can be returned within 60 days for a full refund.",
-             "Return unused items in original packaging within 60 days of delivery for a full refund to the original payment method. Used gear with a manufacturing defect is covered by warranty instead. Return shipping is free with the prepaid label from your account."),
+             "Return unused items in original packaging within 60 days of delivery for a full refund to the original payment method. Used gear with a manufacturing defect is covered by warranty instead."),
             ("warranty", "Summit-brand gear has a 2-year defect warranty.",
              "Summit-brand items are covered for manufacturing defects for 2 years. Contact support with your order number and photos of the defect."),
-            ("payment", "We accept major cards, PayPal and gift cards.",
-             "Visa, Mastercard, American Express, Discover, PayPal and Summit gift cards are accepted."),
+            ("payment", _PAY["en"], _PAY["en"]),
         ],
         "products": [
             ("ST-TENT-2P", "ridgeline-2p-tent", "Ridgeline 2-Person Tent", "Tents", "Freestanding 3-season backpacking tent, 1.9 kg, two doors and two vestibules.", 32900, 14, "⛺"),
@@ -68,11 +70,10 @@ SEED: dict[StoreId, dict] = {
             ("shipping", "Flat $4.99 shipping, free over $50; delivery in 2–4 business days.",
              "We charge a flat $4.99 for shipping, free on orders over $50. Most orders arrive in 2–4 business days. Fresh-roasted coffee ships within 48 hours of roasting."),
             ("returns", "Returns accepted within 30 days; opened food items are final sale.",
-             "Unused kitchenware can be returned within 30 days for a refund or store credit. Opened coffee, tea and other food items are final sale unless they arrived damaged. Damaged items are replaced free of charge."),
+             "Unused kitchenware can be returned within 30 days for a refund. Opened coffee, tea and other food items are final sale unless they arrived damaged. Damaged items are replaced free of charge."),
             ("warranty", "Electric appliances carry a 1-year warranty.",
              "Grinders, kettles and other electric items are covered for 1 year against defects. Keep your order number for warranty claims."),
-            ("payment", "We accept major cards, Apple Pay and gift cards.",
-             "Visa, Mastercard, American Express, Apple Pay, Google Pay and Bloom & Brew gift cards are accepted."),
+            ("payment", _PAY["en"], _PAY["en"]),
         ],
         "products": [
             ("BB-COF-ETH", "ethiopia-yirgacheffe-beans", "Ethiopia Yirgacheffe Whole Beans", "Coffee", "Light roast, notes of jasmine and lemon. 340 g bag.", 1900, 40, "☕"),
@@ -108,7 +109,7 @@ def seed_store(store: StoreId, url: str, reset: bool) -> None:
     with psycopg.connect(url) as conn, conn.transaction():
         if reset:
             conn.execute("TRUNCATE sandbox_payment_intents, payments, cart_items, carts, password_reset_tokens, sessions, "
-                         "order_items, orders, customers, products, policies, store_profile RESTART IDENTITY CASCADE")
+                         "order_status_history, outbox, job_runs, order_items, orders, customers, products, policies, store_profile RESTART IDENTITY CASCADE")
             conn.execute("ALTER SEQUENCE order_number_seq RESTART")
         elif conn.execute("SELECT count(*) FROM products").fetchone()[0] > 0:
             # Non-destructive backfill for databases seeded before shipping prices existed (migration 0002).

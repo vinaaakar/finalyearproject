@@ -1,6 +1,10 @@
 # Scheduler architecture for reconciliation, unpaid-order expiry and outbox work
 
-Status: **decision document. Nothing is installed, configured or running.** It selects how the periodic and background
+Status: **worker implemented in Phase G** (`backend/app/worker.py`, migration `0006_jobs.sql`, tests
+`backend/tests/test_phaseG_worker.py`). Jobs today: `expire_unpaid` (cancels unpaid orders after
+`UNPAID_ORDER_TTL_MINUTES`, default 1440, after checking the payment provider) and the outbox (`email.order_shipped`).
+Payment reconciliation/capture/refund jobs below remain designs (payment integration is out of scope). The worker is not
+started by any script; run `backend/.venv/bin/python -m app.worker` (or `--once`) by hand. Original decision text: It selects how the periodic and background
 work in `docs/india-razorpay-design.md` §7.3–7.7 will run: payment reconciliation (every 10 min), unpaid-order expiry,
 capturing authorisations before their window ends, sending refunds, and processing the `outbox` (emails, staff alerts).
 

@@ -1,0 +1,12 @@
+# Builds both storefronts and serves them with Caddy (automatic HTTPS), which also proxies /api to the API container.
+FROM node:22-alpine AS build
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/packages ./packages
+COPY frontend/apps ./apps
+RUN npm ci --omit=optional --ignore-scripts=false && npm run build -w store-a && npm run build -w store-b
+
+FROM caddy:2-alpine
+COPY deploy/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /src/apps/store-a/dist /srv/store-a
+COPY --from=build /src/apps/store-b/dist /srv/store-b

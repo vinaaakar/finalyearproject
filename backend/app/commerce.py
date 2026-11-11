@@ -22,7 +22,7 @@ import psycopg
 
 from . import repositories as repo
 from .db import store_connection
-from .order_state import ConcurrentChange, InvalidTransition, transition_order, transition_payment
+from .order_state import ConcurrentChange, InvalidTransition, record_history, transition_order, transition_payment
 from .payments.base import PaymentProvider
 from .stores import ORDER_PREFIX, SHIPPING_EXCLUDED_REGIONS, StoreId
 
@@ -46,18 +46,25 @@ class CartOwner:
     guest_hash: str | None = None
 
 
-def money(cents: int) -> str:
-    return f"${cents / 100:,.2f}"
+def money(cents: int, currency: str = "USD") -> str:
+    # One formatter for every currency (app/markets.py); USD output is unchanged ("$1,249.99").
+    from .markets import format_money
+    return format_money(cents, currency)
 
 
 # ---- shipping ------------------------------------------------------------------------------
-def shipping_options(rates: dict[str, Any], subtotal: int) -> list[dict[str, Any]]:
+def shipping_options(rates: dict[str, Any] | None, subtotal: int) -> list[dict[str, Any]]:
+    """Options for one destination's rates (shipping_zones.rates_for). None = no rates for that destination: no options,
+    never a guessed or US price."""
+    if rates is None:
+        return []
+    cur = (rates.get("currency") or "USD").strip()   # the rates' own currency (INR for India zones)
     free_min = rates["free_shipping_min_cents"]
     standard = 0 if subtotal == 0 or (free_min is not None and subtotal >= free_min) else rates["standard_shipping_cents"]
-    options = [{"method": "standard", "label": "Standard", "cents": standard, "price": money(standard)}]
+    options = [{"method": "standard", "label": rates.get("standard_label", "Standard"), "cents": standard, "price": money(standard, cur)}]
     if rates["expedited_shipping_cents"] is not None:
-        options.append({"method": "expedited", "label": "Expedited (2-day)", "cents": rates["expedited_shipping_cents"],
-                        "price": money(rates["expedited_shipping_cents"])})
+        options.append({"method": "expedited", "label": rates.get("expedited_label", "Expedited (2-day)"),
+                        "cents": rates["expedited_shipping_cents"], "price": money(rates["expedited_shipping_cents"], cur)})
     return options
 
 
@@ -109,35 +116,85 @@ def _line_problem(line: dict[str, Any]) -> str | None:
     return None
 
 
-def _view(lines: list[dict[str, Any]], rates: dict[str, Any], method: str = "standard") -> dict[str, Any]:
+_US_RATES = object()   # get_cart default: the store's own (US) rates, exactly as before country-aware checkout
+
+SHIPPING_UNCONFIRMED = "Shipping to this address isn't available yet: the store hasn't set delivery rates for it, so the order can't be placed."
+PRICES_UNCONFIRMED = "Prices in {currency} haven't been set for {what} yet, so an order can't be placed. Prices are never converted from another currency."
+
+
+def _priced(store: StoreId, conn, lines: list[dict[str, Any]], country: str) -> tuple[str, list[dict[str, Any]]]:
+    """The lines priced in the destination's currency (app/pricing.py). The catalogue currency uses products.price_cents;
+    any other uses only owner-approved prices — a line without one gets price_cents None (never converted)."""
+    from .pricing import base_currency, currency_for_country, prices_for
+    currency = currency_for_country(store, country)
+    if currency == base_currency(store):
+        return currency, lines
+    prices = prices_for(store, currency, lines, conn)
+    return currency, [{**ln, "price_cents": prices.get(ln["product_id"])} for ln in lines]
+
+
+def _view(lines: list[dict[str, Any]], rates: dict[str, Any] | None, method: str = "standard",
+          country: str = "US", currency: str | None = None) -> dict[str, Any]:
+    currency = currency or (rates or {}).get("currency") or "USD"
+    if rates is not None and (rates.get("currency") or currency) != currency:
+        rates = None            # rates in another currency are never applied (no conversion)
+    unpriced = [ln["name"] for ln in lines if ln["price_cents"] is None]
     items, problems, subtotal = [], [], 0
     for ln in lines:
         problem = _line_problem(ln)
-        line_total = ln["price_cents"] * ln["quantity"]
-        subtotal += line_total
+        line_total = None if ln["price_cents"] is None else ln["price_cents"] * ln["quantity"]
+        subtotal += line_total or 0
         if problem:
             problems.append(problem)
         items.append({
             "slug": ln["slug"], "name": ln["name"], "emoji": ln["emoji"], "quantity": ln["quantity"],
-            "unit_price_cents": ln["price_cents"], "unit_price": money(ln["price_cents"]),
-            "line_total_cents": line_total, "line_total": money(line_total),
+            "unit_price_cents": ln["price_cents"], "unit_price": None if ln["price_cents"] is None else money(ln["price_cents"], currency),
+            "line_total_cents": line_total, "line_total": None if line_total is None else money(line_total, currency),
+            "price_available": ln["price_cents"] is not None,
             "stock_qty": ln["stock_qty"], "max_quantity": max(0, min(MAX_LINE_QTY, ln["stock_qty"])), "problem": problem,
         })
+    if unpriced:
+        # No approved price in this currency for some items: no amounts at all (a partial or converted total would mislead).
+        what = "these items" if len(unpriced) < len(lines) else ("this item" if len(lines) == 1 else "the items in your cart")
+        return {
+            "items": items, "item_count": sum(i["quantity"] for i in items), "currency": currency, "prices_available": False,
+            "price_problem": PRICES_UNCONFIRMED.format(currency=currency, what=what), "unpriced_items": unpriced,
+            "subtotal_cents": None, "subtotal": None,
+            "shipping_method": method, "shipping_cents": None, "shipping": None, "shipping_available": rates is not None,
+            "shipping_problem": None if rates is not None else SHIPPING_UNCONFIRMED, "shipping_country": country,
+            "shipping_options": [], "total_cents": None, "total": None, "total_excludes_shipping": True,
+            "problems": problems, "can_checkout": False,
+        }
+    if rates is None:
+        # No rates for this destination: the total shown is the goods only, and checkout is refused.
+        return {
+            "items": items, "item_count": sum(i["quantity"] for i in items),
+            "subtotal_cents": subtotal, "subtotal": money(subtotal, currency),
+            "shipping_method": method, "shipping_cents": None, "shipping": None, "shipping_available": False,
+            "shipping_problem": SHIPPING_UNCONFIRMED, "shipping_country": country,
+            "shipping_options": [], "total_cents": subtotal, "total": money(subtotal, currency), "total_excludes_shipping": True,
+            "currency": currency, "prices_available": True, "problems": problems, "can_checkout": False,
+        }
     shipping = shipping_cost(rates, subtotal, method) if items else 0
     total = subtotal + shipping
     return {
         "items": items, "item_count": sum(i["quantity"] for i in items),
-        "subtotal_cents": subtotal, "subtotal": money(subtotal),
-        "shipping_method": method, "shipping_cents": shipping, "shipping": money(shipping),
-        "shipping_options": shipping_options(rates, subtotal), "total_cents": total, "total": money(total),
-        "currency": rates["currency"], "problems": problems, "can_checkout": bool(items) and not problems,
+        "subtotal_cents": subtotal, "subtotal": money(subtotal, currency),
+        "shipping_method": method, "shipping_cents": shipping, "shipping": money(shipping, currency), "shipping_available": True,
+        "shipping_country": rates.get("country", "US"),
+        "shipping_options": shipping_options(rates, subtotal), "total_cents": total, "total": money(total, currency),
+        "currency": currency, "prices_available": True, "problems": problems, "can_checkout": bool(items) and not problems,
     }
 
 
-def get_cart(store: StoreId, owner: CartOwner, method: str = "standard") -> dict[str, Any]:
-    rates = repo.get_shipping_rates(store)
+def get_cart(store: StoreId, owner: CartOwner, method: str = "standard", rates: Any = _US_RATES, country: str = "US") -> dict[str, Any]:
+    """`rates`: a destination's rates (shipping_zones.rates_for), None for a destination without rates, or omitted for the
+    store's US rates (cart page, assistant, US checkout — unchanged)."""
+    if rates is _US_RATES:
+        rates = repo.get_shipping_rates(store)
     with store_connection(store) as conn:
-        return _view(_cart_lines(conn, _find_cart(conn, owner)), rates, method)
+        currency, lines = _priced(store, conn, _cart_lines(conn, _find_cart(conn, owner)), country)
+        return _view(lines, rates, method, country, currency)
 
 
 def set_item(store: StoreId, owner: CartOwner, slug: str, quantity: int, *, add: bool = False) -> dict[str, Any]:
@@ -194,10 +251,19 @@ def merge_guest_cart(store: StoreId, guest_hash: str, customer_id: int) -> dict[
 
 
 # ---- checkout --------------------------------------------------------------------------------
-def validate_address(store: StoreId, address: dict[str, Any]) -> None:
-    if address["region"] in SHIPPING_EXCLUDED_REGIONS[store]:
+def validate_address(store: StoreId, address: dict[str, Any]) -> dict[str, Any]:
+    """The destination country's rules (app/markets.py: states / union territories, ZIP or PIN, phone), then this store's
+    own exclusions. Returns the normalised address (upper-case region, E.164 phone)."""
+    from .markets import AddressError, get_market
+    from .markets import validate_address as market_rules
+    try:
+        address = market_rules(get_market(address.get("country", "US")), address)
+    except AddressError as e:
+        raise CommerceError(422, "Please check the shipping address.", "validation_error", details=e.problems) from None
+    if address["country"] == "US" and address["region"] in SHIPPING_EXCLUDED_REGIONS[store]:
         raise CommerceError(422, "Sorry, this store does not ship to that state.", "region_not_served",
                             details=[{"field": "shipping.region", "issue": "not served by this store"}])
+    return address
 
 
 def _existing_order(conn, customer_id: int, key: str) -> dict[str, Any] | None:
@@ -207,10 +273,15 @@ def _existing_order(conn, customer_id: int, key: str) -> dict[str, Any] | None:
 
 
 def place_order(store: StoreId, customer_id: int, idempotency_key: str, address: dict[str, Any], method: str,
-                expected_total_cents: int) -> tuple[dict[str, Any], bool]:
-    """Returns (order, created). created=False means this key was already used and the original order is returned."""
-    validate_address(store, address)
-    rates = repo.get_shipping_rates(store)
+                expected_total_cents: int, rates: Any = _US_RATES) -> tuple[dict[str, Any], bool]:
+    """Returns (order, created). created=False means this key was already used and the original order is returned.
+    `rates` are the destination's (shipping_zones.rates_for); None = no rates there → refused, nothing is created."""
+    address = validate_address(store, address)
+    if rates is _US_RATES:
+        rates = repo.get_shipping_rates(store)
+    if rates is None:
+        raise CommerceError(409, SHIPPING_UNCONFIRMED, "shipping_not_configured",
+                            details=[{"field": "shipping.country", "issue": "no delivery rates set for this destination"}])
     try:
         with store_connection(store) as conn, conn.transaction():
             if (prior := _existing_order(conn, customer_id, idempotency_key)) is not None:
@@ -222,7 +293,14 @@ def place_order(store: StoreId, customer_id: int, idempotency_key: str, address:
                 if (prior := _existing_order(conn, customer_id, idempotency_key)) is not None:
                     return repo.get_order_for_customer(store, prior["order_number"], customer_id), False
                 raise CommerceError(409, "Your cart is empty.", "cart_empty")
-            view = _view(lines, rates, method)
+            currency, lines = _priced(store, conn, lines, address["country"])
+            view = _view(lines, rates, method, address["country"], currency)
+            if not view["prices_available"]:
+                raise CommerceError(409, view["price_problem"], "price_not_configured",
+                                    details=[{"field": "cart", "issue": f"no approved {currency} price: {n}"} for n in view["unpriced_items"]])
+            if view["shipping_cents"] is None:
+                raise CommerceError(409, SHIPPING_UNCONFIRMED, "shipping_not_configured",
+                                    details=[{"field": "shipping.country", "issue": "no delivery rates in this currency"}])
             if view["problems"]:
                 raise CommerceError(409, "Some items are no longer available in the quantity requested.", "stock_changed",
                                     details=[{"field": "cart", "issue": p} for p in view["problems"]])
@@ -232,12 +310,13 @@ def place_order(store: StoreId, customer_id: int, idempotency_key: str, address:
             number = ORDER_PREFIX[store] + str(conn.execute("SELECT nextval('order_number_seq') AS n").fetchone()["n"])
             order_id = conn.execute(
                 "INSERT INTO orders (order_number, customer_id, status, idempotency_key, subtotal_cents, shipping_cents, total_cents, "
-                "shipping_method, shipping_name, shipping_line1, shipping_line2, shipping_city, shipping_region, shipping_postal_code, shipping_country) "
-                "VALUES (%s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                "shipping_method, shipping_name, shipping_line1, shipping_line2, shipping_city, shipping_region, shipping_postal_code, shipping_country, shipping_phone, currency) "
+                "VALUES (%s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                 [number, customer_id, idempotency_key, view["subtotal_cents"], view["shipping_cents"], view["total_cents"], method,
                  address["full_name"], address["line1"], address.get("line2") or None, address["city"], address["region"],
-                 address["postal_code"], address["country"]],
+                 address["postal_code"], address["country"], address.get("phone"), currency],
             ).fetchone()["id"]
+            record_history(conn, order_id, None, "pending_payment", actor_role="customer", actor_id=customer_id, note="order placed")
             for ln in lines:
                 conn.execute("INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents) VALUES (%s, %s, %s, %s)",
                              [order_id, ln["product_id"], ln["quantity"], ln["price_cents"]])
@@ -274,9 +353,41 @@ def cancel_pending_order(store: StoreId, customer_id: int, order_number: str) ->
             raise CommerceError(409, "This order has already been paid.", "invalid_state")
         for p in conn.execute("SELECT id FROM payments WHERE order_id = %s AND status = 'pending'", [order["id"]]).fetchall():
             transition_payment(conn, p["id"], "pending", "cancelled")
-        transition_order(conn, order["id"], "pending_payment", "cancelled")
+        transition_order(conn, order["id"], "pending_payment", "cancelled", actor_role="customer", actor_id=customer_id)
         _restock(conn, order["id"])
     return repo.get_order_for_customer(store, order_number, customer_id)
+
+
+def expire_unpaid_order(store: StoreId, order_number: str, provider: PaymentProvider, ttl_minutes: int) -> str:
+    """Background expiry of ONE unpaid order (app.worker). Idempotent: returns what happened —
+    'paid' (the provider says a payment succeeded: it is applied instead of cancelling), 'expired', or 'skipped'
+    (no longer unpaid, not old enough, or locked by a request in progress)."""
+    with store_connection(store) as conn:
+        row = conn.execute("SELECT customer_id FROM orders WHERE order_number = %s AND status = 'pending_payment'",
+                           [order_number]).fetchone()
+        has_pending = row is not None and conn.execute(
+            "SELECT 1 FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.order_number = %s AND p.status = 'pending'",
+            [order_number]).fetchone() is not None
+    if row is None:
+        return "skipped"
+    if has_pending:
+        # Never cancel an order the customer may have just paid for: ask the provider first (same path as the payment page).
+        verify_payment(store, row["customer_id"], order_number, provider)
+    with store_connection(store) as conn, conn.transaction():
+        order = conn.execute(
+            "SELECT id, status FROM orders WHERE order_number = %s AND status = 'pending_payment' "
+            "AND placed_at < now() - make_interval(mins => %s) FOR UPDATE SKIP LOCKED", [order_number, ttl_minutes]).fetchone()
+        if order is None:
+            paid = conn.execute("SELECT status FROM orders WHERE order_number = %s", [order_number]).fetchone()
+            return "paid" if paid and paid["status"] == "processing" else "skipped"
+        if conn.execute("SELECT 1 FROM payments WHERE order_id = %s AND status = 'succeeded'", [order["id"]]).fetchone():
+            return "skipped"
+        for p in conn.execute("SELECT id FROM payments WHERE order_id = %s AND status = 'pending'", [order["id"]]).fetchall():
+            transition_payment(conn, p["id"], "pending", "cancelled")
+        transition_order(conn, order["id"], "pending_payment", "cancelled", note=f"unpaid after {ttl_minutes} minutes")
+        _restock(conn, order["id"])
+    log.info("unpaid order expired store=%s", store.value)
+    return "expired"
 
 
 def _owned_order_for_update(conn, customer_id: int, order_number: str) -> dict[str, Any]:
@@ -294,7 +405,7 @@ def _payment_view(p: dict[str, Any] | None, provider: PaymentProvider) -> dict[s
     if p is None:
         return None
     return {"status": p["status"], "provider": p["provider"], "sandbox": provider.sandbox, "reference": p["provider_ref"],
-            "amount": money(p["amount_cents"])}
+            "amount": money(p["amount_cents"], (p.get("currency") or "USD").strip())}
 
 
 def latest_payment(store: StoreId, customer_id: int, order_number: str, provider: PaymentProvider) -> dict[str, Any] | None:
@@ -311,7 +422,7 @@ def start_payment(store: StoreId, customer_id: int, order_number: str, provider:
     """Create a provider payment for the order's server-side total (or return the one in progress)."""
     with store_connection(store) as conn:
         order = conn.execute(
-            "SELECT id, status, total_cents FROM orders WHERE order_number = %s AND customer_id = %s", [order_number.upper(), customer_id]
+            "SELECT id, status, total_cents, currency FROM orders WHERE order_number = %s AND customer_id = %s", [order_number.upper(), customer_id]
         ).fetchone()
         if order is None:
             raise CommerceError(404, "Order not found.", "not_found")
@@ -320,7 +431,7 @@ def start_payment(store: StoreId, customer_id: int, order_number: str, provider:
         active = conn.execute("SELECT * FROM payments WHERE order_id = %s AND status = 'pending'", [order["id"]]).fetchone()
         if active:
             return _payment_view(active, provider)
-        currency = repo.get_shipping_rates(store)["currency"]
+        currency = order["currency"].strip()   # the order's own currency (migration 0008), never converted
     created = provider.create_payment(store, order["total_cents"], currency)
     try:
         with store_connection(store) as conn:
@@ -370,7 +481,7 @@ def verify_payment(store: StoreId, customer_id: int, order_number: str, provider
                     elif remote.status == "succeeded":
                         transition_payment(conn, payment["id"], "pending", "succeeded")
                         if locked["status"] == "pending_payment":
-                            transition_order(conn, locked["id"], "pending_payment", "processing")
+                            transition_order(conn, locked["id"], "pending_payment", "processing", note="payment confirmed")
                         else:
                             # Paid after the order was cancelled: record it and flag for a refund instead of reviving the order.
                             log.warning("payment succeeded for non-pending order store=%s status=%s; needs refund", store.value, locked["status"])

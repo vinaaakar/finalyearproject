@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import ipaddress
 from typing import Annotated
 
@@ -11,7 +12,7 @@ from . import repositories as repo
 from .commerce import CartOwner
 from .config import Settings
 from .ratelimit import limiter
-from .security import Principal, TokenError, decode_token, hash_opaque_token
+from .security import Principal, TokenError, decode_token, hash_opaque_token, new_opaque_token
 from .stores import StoreId
 
 StorePath = Annotated[StoreId, Path(description="store-a or store-b")]
@@ -56,16 +57,51 @@ def rate_limit(bucket: str):
     return dependency
 
 
+# ---- cookie sessions (AUTH_COOKIES=true, Phase J) --------------------------------------------------------------------
+_UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _cookie_names(store: StoreId) -> tuple[str, str]:
+    key = store.value.replace("-", "_")
+    return f"avc_session_{key}", f"avc_csrf_{key}"
+
+
+def set_session_cookies(response, store: StoreId, token: str, settings) -> str:
+    """HttpOnly session cookie scoped to this store's API path + a CSRF cookie (double-submit). Returns the CSRF token."""
+    session_name, csrf_name = _cookie_names(store)
+    csrf = new_opaque_token()
+    secure = settings.app_env == "production"
+    age = settings.token_ttl_minutes * 60
+    response.set_cookie(session_name, token, max_age=age, path=f"/api/stores/{store.value}", httponly=True, secure=secure, samesite="strict")
+    response.set_cookie(csrf_name, csrf, max_age=age, path=f"/api/stores/{store.value}", httponly=False, secure=secure, samesite="strict")
+    return csrf
+
+
+def clear_session_cookies(response, store: StoreId) -> None:
+    for name in _cookie_names(store):
+        response.delete_cookie(name, path=f"/api/stores/{store.value}")
+
+
 def optional_principal(
     store_id: StorePath,
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal | None:
     if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(401, "Invalid authorization header", headers={"WWW-Authenticate": "Bearer"})
+        session_name, csrf_name = _cookie_names(store_id)
+        token = request.cookies.get(session_name) if request.app.state.settings.auth_cookies else None
+        if not token:
+            return None
+        if request.method in _UNSAFE:
+            # Double-submit CSRF check: a cross-site page can make the browser send the cookie, but cannot read the
+            # CSRF cookie to copy it into this header. (SameSite=Strict already blocks most cross-site sends.)
+            sent, expected = request.headers.get("x-csrf-token", ""), request.cookies.get(csrf_name, "")
+            if not expected or not hmac.compare_digest(sent, expected):
+                raise HTTPException(403, "Missing or invalid CSRF token. Reload the page and try again.")
+    else:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token:
+            raise HTTPException(401, "Invalid authorization header", headers={"WWW-Authenticate": "Bearer"})
     try:
         principal = decode_token(token, request.app.state.settings.secret_key)
     except TokenError:

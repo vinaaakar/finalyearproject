@@ -4,6 +4,7 @@ databases), which are migrated and reseeded with synthetic data once per session
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import pytest
@@ -28,7 +29,12 @@ def settings():
     base = load_settings()
     urls = {k: _to_test_db(v) for k, v in base.store_database_urls.items()}
     # Speech engines are pinned off so results don't depend on the local .env; tests that need an engine install one.
-    return dataclasses.replace(base, store_database_urls=urls, llm_enabled=False, speech_stt="none", speech_tts="none")
+    # The long-standing regression suite runs both stores in the original US market (USD catalogue, US rates and
+    # addresses), so it keeps checking that code path; the deployment default is India-only, which
+    # tests/test_india_*.py run against the real demonstration price list and shipping configuration (india_client).
+    return dataclasses.replace(base, store_database_urls=urls, llm_enabled=False, speech_stt="none", speech_tts="none",
+                               store_markets={"store-a": "US", "store-b": "US"}, checkout_countries=("IN", "US"),
+                               shipping_config_dir=Path(__file__).parent / "fixtures" / "no_shipping_config")
 
 
 @pytest.fixture(scope="session", autouse=True)

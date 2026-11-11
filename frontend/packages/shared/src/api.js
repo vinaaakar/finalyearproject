@@ -71,6 +71,9 @@ export function createApi(storeId) {
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const session = loadSession();
     if (session?.token) headers.Authorization = `Bearer ${session.token}`;
+    // Cookie sessions (server AUTH_COOKIES=true): the browser sends the HttpOnly cookie itself; state-changing requests
+    // carry the CSRF token the server gave at sign-in (double-submit). The session token is never visible here.
+    if (session?.cookie && method !== 'GET' && method !== 'HEAD') headers['X-CSRF-Token'] = session.csrf;
     const guest = cartToken();
     if (guest && !session) headers['X-Cart-Token'] = guest;
     let res;
@@ -78,6 +81,7 @@ export function createApi(storeId) {
       res = await fetch(path.startsWith('/api/') ? path : base + path, {
         method,
         headers,
+        credentials: 'same-origin',
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch {
@@ -94,23 +98,28 @@ export function createApi(storeId) {
   async function startSession(data) {
     // Move anything the shopper added as a guest into their account cart BEFORE announcing the
     // session, so pages that react to sign-in (e.g. checkout) already see the merged cart.
+    const cookieMode = data.token_type === 'cookie';
     const guest = cartToken();
     if (guest && data.customer.role === 'customer') {
       try {
-        await request('/cart/merge', { method: 'POST', headers: { Authorization: `Bearer ${data.access_token}`, 'X-Cart-Token': guest } });
+        const auth = cookieMode ? { 'X-CSRF-Token': data.csrf_token } : { Authorization: `Bearer ${data.access_token}` };
+        await request('/cart/merge', { method: 'POST', headers: { ...auth, 'X-Cart-Token': guest } });
         setCartToken(null);
       } catch {
         /* keep the guest token; merge can be retried on next sign-in */
       }
     }
-    saveSession({ token: data.access_token, customer: data.customer, expiresAt: Date.now() + data.expires_in * 1000 });
+    saveSession(cookieMode
+      ? { cookie: true, csrf: data.csrf_token, customer: data.customer, expiresAt: Date.now() + data.expires_in * 1000 }
+      : { token: data.access_token, customer: data.customer, expiresAt: Date.now() + data.expires_in * 1000 });
     return data.customer;
   }
 
   return {
     storeId,
     loadSession,
-    store: () => request(''),
+    store: (lang) => request(lang && lang !== 'en' ? `?lang=${encodeURIComponent(lang)}` : ''),
+    market: () => request('/market'),
     categories: () => request('/categories'),
     products: ({ q, category } = {}) => {
       const p = new URLSearchParams();
@@ -143,8 +152,48 @@ export function createApi(storeId) {
     order: (number) => request(`/orders/${encodeURIComponent(number)}`),
     adminOrders: () => request('/admin/orders'),
 
+    // ---- staff fulfilment (agent accounts only; the server enforces it)
+    staffOrders({ status = [], q = '', limit = 25, offset = 0 } = {}) {
+      const params = new URLSearchParams();
+      status.forEach((s) => params.append('status', s));
+      if (q) params.set('q', q);
+      params.set('limit', String(limit));
+      params.set('offset', String(offset));
+      return request(`/staff/orders?${params}`);
+    },
+    staffOrder: (number) => request(`/staff/orders/${encodeURIComponent(number)}`),
+    staffAction: (number, action, body) =>
+      request(`/staff/orders/${encodeURIComponent(number)}/${action}`, { method: 'POST', body }),
+    staffTracking: (number, body) => request(`/staff/orders/${encodeURIComponent(number)}/tracking`, { method: 'PUT', body }),
+
+    // ---- customer care: complaints, returns, simulated refunds, human help (the server enforces every rule)
+    careOptions: (kind, order) => request(`/care/options?kind=${encodeURIComponent(kind)}${order ? `&order=${encodeURIComponent(order)}` : ''}`),
+    careCreate: (body, idempotencyKey) => request('/care/requests', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body }),
+    careRequests: () => request('/care/requests'),
+    careRequest: (ref) => request(`/care/requests/${encodeURIComponent(ref)}`),
+    careReply: (ref, message) => request(`/care/requests/${encodeURIComponent(ref)}/reply`, { method: 'POST', body: { message } }),
+    careWithdraw: (ref) => request(`/care/requests/${encodeURIComponent(ref)}/withdraw`, { method: 'POST' }),
+    staffCare({ kind = [], status = [], q = '', dateFrom = '', dateTo = '', limit = 25, offset = 0 } = {}) {
+      const p = new URLSearchParams();
+      kind.forEach((k) => p.append('kind', k));
+      status.forEach((s) => p.append('status', s));
+      if (q) p.set('q', q);
+      if (dateFrom) p.set('date_from', dateFrom);
+      if (dateTo) p.set('date_to', dateTo);
+      p.set('limit', String(limit));
+      p.set('offset', String(offset));
+      return request(`/staff/care?${p}`);
+    },
+    staffCareRequest: (ref) => request(`/staff/care/${encodeURIComponent(ref)}`),
+    staffCareAgents: () => request('/staff/care/agents'),
+    staffCareStatus: (ref, body) => request(`/staff/care/${encodeURIComponent(ref)}/status`, { method: 'POST', body }),
+    staffCareAssign: (ref, assigneeId) => request(`/staff/care/${encodeURIComponent(ref)}/assign`, { method: 'POST', body: { assignee_id: assigneeId } }),
+    staffCareNote: (ref, body) => request(`/staff/care/${encodeURIComponent(ref)}/notes`, { method: 'POST', body: { body } }),
+    staffCareMessage: (ref, body) => request(`/staff/care/${encodeURIComponent(ref)}/messages`, { method: 'POST', body: { body } }),
+
     // ---- cart (server computes every price and total)
-    cart: async () => (await request('/cart')).cart,
+    // country (delivery country) → prices in its currency; omitted = the catalogue prices and US rates, as before
+    cart: async (country) => (await request(country ? `/cart?country=${encodeURIComponent(country)}` : '/cart')).cart,
     async addToCart(slug, quantity = 1) {
       const r = await request('/cart/items', { method: 'POST', body: { slug, quantity } });
       if (r.cart_token) setCartToken(r.cart_token);
@@ -155,7 +204,10 @@ export function createApi(storeId) {
     removeCartItem: async (slug) => cartChanged((await request(`/cart/items/${encodeURIComponent(slug)}`, { method: 'DELETE' })).cart),
 
     // ---- checkout & payments
-    quote: async (shippingMethod) => (await request('/checkout/quote', { method: 'POST', body: { shipping_method: shippingMethod } })).cart,
+    // destination omitted = the store's US rates (the request older servers understand)
+    quote: async (shippingMethod, destination) => (await request('/checkout/quote', { method: 'POST',
+      body: { shipping_method: shippingMethod, ...(destination ? { destination } : {}) } })).cart,
+    addressOptions: () => request('/checkout/address-options'),
     async checkout({ shipping, shippingMethod, expectedTotalCents, idempotencyKey }) {
       const r = await request('/checkout', {
         method: 'POST',
@@ -174,7 +226,7 @@ export function createApi(storeId) {
 
     // conversationLanguage only decides language-neutral messages; speechReceipt carries the server's own
     // acoustic detection; languageOverride is an explicit customer choice (never sent as "detection").
-    chat: (message, history, channel = 'web_chat', { conversationLanguage, speechReceipt, languageOverride } = {}) =>
+    chat: (message, history, channel = 'web_chat', { conversationLanguage, speechReceipt, languageOverride, careDraft } = {}) =>
       request('/chat', {
         method: 'POST',
         body: {
@@ -182,6 +234,7 @@ export function createApi(storeId) {
           ...(conversationLanguage && { conversation_language: conversationLanguage }),
           ...(speechReceipt && { speech_receipt: speechReceipt }),
           ...(languageOverride && { language_override: languageOverride }),
+          ...(careDraft && { care_draft: careDraft }),
         },
       }),
     speechCapabilities: () => request('/api/speech/capabilities'),

@@ -61,9 +61,9 @@ Voices actually present (checked in Chrome on this Mac): `ta-IN Vani (local)`, `
 `en-IN Rishi (local)`, `hi-IN Google हिन्दी (REMOTE, excluded)`. In Chrome the macOS voices appear a moment
 *after* the first remote-only list, so the speaker waits for `voiceschanged` before deciding.
 
-**Model location caveat.** No model was downloaded. The multilingual `ggml-base.bin` used for testing is the copy
-inside another app's container (`~/Library/Containers/maccatalyst.com.frontrow.vlog/…/whisper_base_v1.bundle/`),
-read-only. That app could remove it, so for regular use keep a dedicated copy (148 MB) or a better model.
+**Model location.** The models live in the project's own git-ignored `models/whisper/` folder, verified against the
+SHA-1 published by whisper.cpp (`scripts/setup_speech_models.sh`); the backend uses them when `WHISPER_MODEL_PATH` /
+`WHISPER_EN_MODEL_PATH` are unset. How to obtain them: README → *Local AI models*.
 
 ## Replies in Tamil and Hindi
 

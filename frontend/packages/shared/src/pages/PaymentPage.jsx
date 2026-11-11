@@ -16,6 +16,9 @@ export default function PaymentPage() {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const cancelling = useRef(false);
+  const cancelButtonRef = useRef(null);
+  const confirmRef = useRef(null);
+  const returnFocusToCancel = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -30,6 +33,16 @@ export default function PaymentPage() {
   useEffect(() => {
     if (session) load();
   }, [session, load]);
+
+  // Keyboard focus follows the cancel confirmation: into it when it opens (the button that had focus is replaced),
+  // and back to "Cancel this order" when the customer chooses "Keep my order".
+  useEffect(() => {
+    if (confirmCancel) confirmRef.current?.focus();
+    else if (returnFocusToCancel.current) {
+      returnFocusToCancel.current = false;
+      cancelButtonRef.current?.focus();
+    }
+  }, [confirmCancel]);
 
   async function run(fn) {
     setBusy(true);
@@ -97,9 +110,9 @@ export default function PaymentPage() {
             </>
           )}
           {!confirmCancel ? (
-            <button type="button" className="btn btn-small link-btn" onClick={() => setConfirmCancel(true)} disabled={busy}>Cancel this order</button>
+            <button type="button" ref={cancelButtonRef} className="btn btn-small link-btn" onClick={() => setConfirmCancel(true)} disabled={busy}>Cancel this order</button>
           ) : (
-            <div className="notice notice-warn" role="group" aria-label={`Confirm cancelling order ${order.order_number}`}>
+            <div ref={confirmRef} tabIndex={-1} className="notice notice-warn" role="group" aria-label={`Confirm cancelling order ${order.order_number}`}>
               <p>
                 <strong>Cancel order {order.order_number}?</strong> The order will be cancelled and its items released.
                 {' '}No payment has been taken for it{inFlight ? ', and the test payment in progress will be cancelled too' : ''}.
@@ -109,7 +122,7 @@ export default function PaymentPage() {
                 <button type="button" className="btn btn-danger" onClick={cancel} disabled={busy}>
                   {busy ? 'Cancelling…' : `Yes, cancel order ${order.order_number}`}
                 </button>
-                <button type="button" className="btn" onClick={() => setConfirmCancel(false)} disabled={busy}>Keep my order</button>
+                <button type="button" className="btn" onClick={() => { returnFocusToCancel.current = true; setConfirmCancel(false); }} disabled={busy}>Keep my order</button>
               </div>
             </div>
           )}

@@ -12,6 +12,10 @@ __pycache__/
 # Node
 node_modules/
 dist/
+# Playwright output (traces, screenshots of failures)
+frontend/test-results/
+frontend/playwright-report/
+frontend/.mutation-tmp/
 
 # Runtime
 .run/
@@ -26,3 +30,23 @@ dist/
 *.sql.gz
 *.dump
 backups/
+
+# Local speech models (verified copies, scripts/setup_speech_models.sh) — large binaries, never committed
+models/
+*.bin
+*.gguf
+
+# Other local / generated files (defensive)
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+coverage/
+.coverage
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.tmp
+.idea/
+.vscode/

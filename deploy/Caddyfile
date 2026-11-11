@@ -1,0 +1,61 @@
+# Production web tier: one site per store, automatic HTTPS (Let's Encrypt) for the two domains, HTTP → HTTPS redirects.
+# STORE_A_DOMAIN / STORE_B_DOMAIN / ACME_EMAIL come from the environment (docker-compose.prod.yml).
+{
+	email {$ACME_EMAIL}
+}
+
+(storefront_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# microphone=(self): the voice assistant records only on this origin, only after the shopper presses the mic.
+		Permissions-Policy "camera=(), geolocation=(), payment=(), microphone=(self)"
+		Cross-Origin-Opener-Policy "same-origin"
+		# No inline scripts or styles exist in the build; images may be data: (favicon) and spoken replies are blob: audio.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+		-Server
+	}
+}
+
+(api_proxy) {
+	# Health and diagnostics are for the container/orchestrator only (they call the API directly), never the internet.
+	handle /api/health* {
+		respond 404
+	}
+	handle /api/* {
+		# The API sets its own strict headers. Only the client address reaches it (TRUSTED_PROXIES must list this proxy).
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+}
+
+{$STORE_A_DOMAIN} {
+	import storefront_headers
+	import api_proxy
+	handle {
+		root * /srv/store-a
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+	encode zstd gzip
+	log
+}
+
+{$STORE_B_DOMAIN} {
+	import storefront_headers
+	import api_proxy
+	handle {
+		root * /srv/store-b
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+	encode zstd gzip
+	log
+}

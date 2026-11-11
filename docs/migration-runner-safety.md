@@ -1,8 +1,11 @@
 # Migration runner safety (F14): design
 
-Status: **design only. `backend/app/migrate.py` is unchanged; nothing here is implemented or executed.** Implementing it
-changes the `schema_migrations` bookkeeping table, so the first run of the new runner is itself a reviewed, approved step
-(§6). Related: `docs/database-safety.md` (backup, restore-check, recovery), `docs/india-razorpay-design.md` §4 (how
+Status: **implemented in Phase G** (`backend/app/migrate.py`, tests `backend/tests/test_phaseG_migrations.py`, run against
+throwaway schemas inside the `*_test` databases). It has been applied to the `*_test` databases only. The development
+databases still have rows without checksums and pending 0004–0006: the rollout in §6 (`--adopt`, backup, `--plan`,
+`--apply`) needs your authorisation. Differences from the design below: destructive statements are also refused by the
+lint; a brand-new installation (every store database without any table) needs no backup; the API refuses to start while
+a migration is pending. Related: `docs/database-safety.md` (backup, restore-check, recovery), `docs/india-razorpay-design.md` §4 (how
 0004–0007 will be applied), `docs/testing-plan.md` (Migration safety tests).
 
 ## 1. Current behaviour (`backend/app/migrate.py`)

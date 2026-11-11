@@ -18,6 +18,75 @@ function readPref() {
 
 // The conversation language lives in sessionStorage per store: a new tab (new guest conversation)
 // starts in Tamil, and Store A and Store B never share it.
+// Below this width the chat panel covers the whole screen (see styles.css), so it behaves as a modal dialog.
+const FULL_SCREEN_QUERY = '(max-width: 720px)';
+
+function useFullScreenChat() {
+  const query = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(FULL_SCREEN_QUERY);
+  const [full, setFull] = useState(() => !!query()?.matches);
+  useEffect(() => {
+    const mq = query();
+    if (!mq) return undefined;
+    const update = () => setFull(mq.matches);
+    update();
+    mq.addEventListener?.('change', update);
+    return () => mq.removeEventListener?.('change', update);
+  }, []);
+  return full;
+}
+
+// The conversation itself (last 30 messages + an unfinished customer-care draft) survives a page refresh in
+// sessionStorage, per store AND per account: a guest's chat carries over when that guest signs in ("sign in first —
+// I'll keep what you told me"), signing out clears the account's chat, and another account never sees it. Voice
+// recordings, speech receipts and anything that looks like a card number or password are never stored.
+const MAX_STORED_MESSAGES = 30;
+const SECRET_RE = /(?<!\d)(?:\d[ -]?){13,19}(?!\d)|\b(?:password|passcode|passwd|cvv|cvc|otp|upi\s*pin)\b|கடவுச்சொல்|பாஸ்வேர்டு|पासवर्ड/i;
+
+export function accountKey(session) {
+  const email = session?.customer?.email;
+  if (!email) return 'guest';
+  let h = 0x811c9dc5;                               // FNV-1a: the e-mail address itself is not put in the key
+  for (const ch of email.toLowerCase()) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `acct-${h.toString(16)}`;
+}
+
+export const chatStorageKey = (storeId, account) => `avc:${storeId}:chat:${account}`;
+
+function loadConversation(key) {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(key));
+    return {
+      messages: Array.isArray(v?.messages) ? v.messages : [],
+      careDraft: v?.careDraft && typeof v.careDraft === 'object' ? v.careDraft : null,
+    };
+  } catch {
+    return { messages: [], careDraft: null };
+  }
+}
+
+function storable(m) {
+  // Only what is needed to show the conversation again (no audio, speech receipts or retry data).
+  const content = m.role === 'user' && SECRET_RE.test(m.content) ? '•••' : m.content;
+  const kept = {
+    id: m.id, role: m.role, content, viaVoice: !!m.viaVoice, error: !!m.error, language: m.language, languageStatus: m.languageStatus,
+    products: m.products, orders: m.orders, actions: m.actions, requiresLogin: m.requiresLogin, source: m.source, cart: m.cart, done: m.done,
+  };
+  return Object.fromEntries(Object.entries(kept).filter(([, v]) => v !== undefined));
+}
+
+function saveConversation(key, messages, draft) {
+  try {
+    if (!messages.length && !draft) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, JSON.stringify({ messages: messages.slice(-MAX_STORED_MESSAGES).map(storable), careDraft: draft }));
+  } catch {
+    /* storage unavailable or full: the conversation just won't survive a reload */
+  }
+}
+
+function forgetConversation(key) {
+  try { sessionStorage.removeItem(key); } catch { /* nothing stored */ }
+}
+
 function loadConversationLanguage(key) {
   try {
     const v = sessionStorage.getItem(key);
@@ -30,10 +99,14 @@ function loadConversationLanguage(key) {
 export default function ChatWidget({ open, prefill, onOpen, onClose }) {
   const { api, config, session } = useStore();
   const convKey = `avc:${config.storeId}:conversation-language`;
-  const [messages, setMessages] = useState([]);
+  const account = accountKey(session);
+  const chatKey = chatStorageKey(config.storeId, account);
+  const [restored] = useState(() => loadConversation(chatKey));
+  const [messages, setMessages] = useState(restored.messages);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [interim, setInterim] = useState('');
   const [voiceNotice, setVoiceNotice] = useState(null);
   const [speakReplies, setSpeakReplies] = useState(readPref);
@@ -48,7 +121,17 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
   langRef.current = lang;
   const listRef = useRef(null);
   const inputRef = useRef(null);
+  const panelRef = useRef(null);
+  const launcherRef = useRef(null);
+  // What had focus when the chat opened (the header's Help button, "Ask … about this"); null for the launcher,
+  // which is replaced by the panel while the chat is open.
+  const openerRef = useRef(null);
+  const restoreFocus = useRef(false);
+  const fullScreen = useFullScreenChat();
   const actionBusy = useRef(false);
+  const careDraft = useRef(restored.careDraft);   // customer-care request in progress (see backend app/assistant/care_flow.py)
+  const accountRef = useRef(account);
+  const skipSave = useRef(false);
   const [confirming, setConfirming] = useState(null); // `${messageId}:${index}` of a cancel awaiting confirmation
   const navigate = useNavigate();
   const support = voiceSupport();
@@ -62,6 +145,28 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
     }
   }, [convKey, lang]);
 
+  // Signing in, signing out or switching accounts in this tab.
+  useEffect(() => {
+    const before = accountRef.current;
+    if (before === account) return;
+    accountRef.current = account;
+    forgetConversation(chatStorageKey(config.storeId, before));
+    // A guest who signs in is the same person: their conversation (and any care request they started) continues.
+    if (before === 'guest') return;
+    // Signed out, or another account: the previous account's conversation is removed and never shown again.
+    speaker.cancel();
+    skipSave.current = true;          // this render still holds the previous account's messages
+    const next = account === 'guest' ? { messages: [], careDraft: null } : loadConversation(chatKey);
+    careDraft.current = next.careDraft;
+    setMessages(next.messages);
+  }, [account, chatKey, config.storeId]);
+
+  // Saved after every change (the care draft is updated together with the reply that carries it).
+  useEffect(() => {
+    if (skipSave.current) { skipSave.current = false; return; }
+    if (accountRef.current === account) saveConversation(chatKey, messages, careDraft.current);
+  }, [chatKey, account, messages]);
+
   useEffect(() => {
     if (open) {
       if (prefill) setInput(prefill);
@@ -73,6 +178,48 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
       if (rec?.cancel) rec.cancel(); else rec?.stop();
     }
   }, [open, prefill]);
+
+  useEffect(() => {
+    if (open) {
+      const active = document.activeElement;   // still the opener: the input is focused on the next tick
+      openerRef.current = active && active !== document.body && !panelRef.current?.contains(active) ? active : null;
+    } else if (restoreFocus.current) {
+      // Closed by the user (close button or Escape): return focus to the opener if it is still on the page,
+      // otherwise to the launcher (the launcher that was clicked has been re-created).
+      restoreFocus.current = false;
+      const opener = openerRef.current;
+      const target = opener && opener.isConnected && opener !== document.body ? opener : launcherRef.current;
+      target?.focus();
+    }
+  }, [open]);
+
+  // Full-screen (phone) chat is modal: everything else on the page is made inert (no focus, no clicks, hidden from
+  // assistive technology) while it is open, and restored when it closes or the screen gets wider.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!open || !fullScreen || !panel?.parentElement) return undefined;
+    const others = [...panel.parentElement.children].filter((el) => el !== panel && !el.inert);
+    others.forEach((el) => { el.inert = true; });
+    return () => others.forEach((el) => { el.inert = false; });
+  }, [open, fullScreen]);
+
+  function closeByUser() {
+    restoreFocus.current = true;
+    onClose();
+  }
+
+  function onPanelKeyDown(e) {
+    // Escape closes the chat, but not while an input method is composing (Tamil/Hindi keyboards use Escape there).
+    if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent?.isComposing) return;
+    e.stopPropagation();
+    closeByUser();
+  }
+
+  // Show when a reply is being spoken (and let the customer stop it).
+  useEffect(() => {
+    speaker.onChange = setSpeaking;
+    return () => { if (speaker.onChange === setSpeaking) speaker.onChange = null; };
+  }, []);
 
   // Ask once whether this store's server offers local speech recognition / synthesis.
   useEffect(() => {
@@ -107,6 +254,7 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
     const message = text.trim();
     if (!message || busyRef.current) return;
     const history = messagesRef.current.filter((m) => !m.error).slice(-8).map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }));
+    speaker.cancel();   // a new question interrupts a reply that is still being read aloud
     setMessages((m) => [...m, { role: 'user', content: message, viaVoice, voiceMeta }]);
     setInput('');
     setVoiceNotice(null);
@@ -115,7 +263,10 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
     try {
       const r = await api.chat(message, history, viaVoice ? 'web_voice' : 'web_chat', {
         conversationLanguage: langRef.current, speechReceipt: voiceMeta?.receipt, languageOverride: override,
+        ...(careDraft.current ? { careDraft: careDraft.current } : {}),
       });
+      // A customer-care request being put together (server-validated on every turn; submitted only after a "yes").
+      careDraft.current = r.care_draft || null;
       const id = `${Date.now()}-${Math.random()}`;
       const reply = {
         id, role: 'assistant', content: r.reply, products: r.products, orders: r.orders, requiresLogin: r.requires_login, source: r.source,
@@ -164,6 +315,13 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
       navigate(a.to);
       return;
     }
+    if (a.type === 'reply') {
+      // Sends the button's words as the customer's next message (e.g. "yes" to confirm a reviewed request); the server
+      // decides what happens. Only the newest message's choices are active.
+      setMessages((ms) => ms.map((x) => (x.id === m.id ? { ...x, done: { ...(x.done || {}), [key]: true } } : x)));
+      send(a.text, { viaVoice: !!m.viaVoice });
+      return;
+    }
     if (a.type === 'cancel_order' && confirming !== key) { setConfirming(key); return; }
     actionBusy.current = true;
     setBusy(true);
@@ -175,6 +333,10 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
         const cart = await api.addToCart(a.slug, a.quantity);
         ok = cart.items.some((i) => i.slug === a.slug);
         text = ok ? tr(replyLang, 'actionAdded', { qty: a.quantity, name: a.name }) : tr(replyLang, 'actionFailed');
+      } else if (a.type === 'remove_from_cart') {
+        const cart = await api.removeCartItem(a.slug);
+        ok = !cart.items.some((i) => i.slug === a.slug);
+        text = ok ? tr(replyLang, 'actionRemoved', { name: a.name }) : tr(replyLang, 'actionFailed');
       } else if (a.type === 'cancel_order') {
         const r = await api.cancelOrder(a.order_number);
         ok = r.order?.status === 'cancelled';
@@ -194,6 +356,8 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
     ]);
     if (m.viaVoice || speakReplies) say(text, replyLang);
   }
+
+  const lastAssistantId = [...messages].reverse().find((x) => x.role === 'assistant' && !x.system)?.id;
 
   function actionButtons(m) {
     return (
@@ -219,9 +383,10 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
               </span>
             );
           }
+          const stale = a.type === 'reply' && m.id !== lastAssistantId;
           return (
-            <button key={key} type="button" className={`btn btn-small ${a.type === 'add_to_cart' ? 'btn-primary' : ''}`}
-              disabled={busy} onClick={() => runAction(m, a, key)}>{a.label}</button>
+            <button key={key} type="button" className={`btn btn-small ${a.type === 'add_to_cart' || (a.type === 'reply' && i === 0 && m.actions.length === 2) ? 'btn-primary' : ''}`}
+              disabled={busy || stale} onClick={() => runAction(m, a, key)}>{a.label}</button>
           );
         })}
       </div>
@@ -273,20 +438,21 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
 
   if (!open) {
     return (
-      <button type="button" className="chat-launcher" onClick={onOpen} aria-label={`Open chat with ${config.assistantName}`}>
+      <button type="button" ref={launcherRef} className="chat-launcher" onClick={onOpen} aria-label={`Open chat with ${config.assistantName}`}>
         <span aria-hidden="true">💬</span> <span className="launcher-label">Ask {config.assistantName}</span>
       </button>
     );
   }
 
   return (
-    <section className="chat-panel" role="dialog" aria-modal="false" aria-labelledby="chat-title" lang={LANGUAGES[lang].bcp47}>
+    <section ref={panelRef} className="chat-panel" role="dialog" aria-modal={fullScreen ? 'true' : 'false'} aria-labelledby="chat-title"
+      lang={LANGUAGES[lang].bcp47} onKeyDown={onPanelKeyDown}>
       <header className="chat-header">
         <div>
           <h2 id="chat-title">{config.assistantName}</h2>
           <p>{t('subtitle', { store: config.name })}{session ? t('signedInAs', { name: session.customer.name.split(' ')[0] }) : ''}</p>
         </div>
-        <button type="button" className="icon-btn" onClick={onClose} aria-label={t('close')}>✕</button>
+        <button type="button" className="icon-btn" onClick={closeByUser} aria-label={t('close')}>✕</button>
       </header>
 
       <div className="chat-log" ref={listRef} aria-live="polite" aria-relevant="additions">
@@ -336,6 +502,12 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
         {busy && <div className="bubble bubble-assistant typing" aria-label={t('typing')}><span /><span /><span /></div>}
       </div>
 
+      {speaking && (
+        <div className="chat-speaking" role="status">
+          <span aria-hidden="true">🔊</span> {t('speaking', { assistant: config.assistantName })}
+          <button type="button" className="btn btn-small" onClick={() => speaker.cancel()}>{t('stopSpeaking')}</button>
+        </div>
+      )}
       {voiceNotice && <p className="notice notice-warn chat-notice" role="status">{voiceNotice}</p>}
 
       <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(input); }}>

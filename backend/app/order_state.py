@@ -42,12 +42,34 @@ def can_transition(table: dict[str, frozenset[str]], current: str, target: str) 
     return target in table.get(current, frozenset())
 
 
-def transition_order(conn, order_id: int, current: str, target: str) -> None:
+ACTOR_ROLES = frozenset({"customer", "agent", "system"})
+
+
+def record_history(conn, order_id: int, from_status: str | None, to_status: str, *, actor_role: str,
+                   actor_id: int | None = None, note: str | None = None, carrier: str | None = None,
+                   tracking_number: str | None = None) -> None:
+    """Append one row to order_status_history (migration 0005), in the caller's transaction."""
+    if actor_role not in ACTOR_ROLES or (actor_role == "system") != (actor_id is None):
+        raise ValueError("actor_role/actor_id mismatch")
+    conn.execute(
+        "INSERT INTO order_status_history (order_id, from_status, to_status, actor_role, actor_customer_id, note, carrier, tracking_number) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        [order_id, from_status, to_status, actor_role, actor_id, note, carrier, tracking_number],
+    )
+
+
+def transition_order(conn, order_id: int, current: str, target: str, *, actor_role: str = "system",
+                     actor_id: int | None = None, note: str | None = None, carrier: str | None = None,
+                     tracking_number: str | None = None) -> None:
+    """Validated compare-and-set status change, recorded in order_status_history in the same transaction
+    (so a status change can never exist without its history row, or the reverse)."""
     if not can_transition(ORDER_TRANSITIONS, current, target):
         raise InvalidTransition(f"order {current} -> {target}")
     cur = conn.execute("UPDATE orders SET status = %s, updated_at = now() WHERE id = %s AND status = %s", [target, order_id, current])
     if cur.rowcount != 1:
         raise ConcurrentChange("order")
+    record_history(conn, order_id, current, target, actor_role=actor_role, actor_id=actor_id, note=note,
+                   carrier=carrier, tracking_number=tracking_number)
 
 
 def transition_payment(conn, payment_id: int, current: str, target: str) -> None:

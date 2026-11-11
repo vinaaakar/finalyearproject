@@ -72,11 +72,35 @@ itself never changes data.
 - Conversation references ("when will **it** arrive?") are taken from the same chat only, and re-checked against the
   database; a new question without such a reference is not tied to an older order.
 
-## Not supported by the system (documented, not simulated)
+## Customer-care requests (complaints, returns, simulated refunds, human help)
 
-Refund initiation or reversal, return labels and return requests, exchanges, order or address edits after placing,
-account edits or deletion, invoices, discount codes, complaint or warranty tickets, live-agent handoff or callbacks,
-real e-mail delivery, real payments, real phone calls.
+Recorded requests with a reference (`SA-CMP-00001`, `BB-RET-00002`, `…-RFD-…`, `…-ESC-…`), handled by staff in
+**Staff → Customer care** (`/staff/care`) and followed by the customer under **My requests** (`/support/requests`).
+Code: `backend/app/care_requests.py` (all rules), `routers/care.py` (API), `assistant/care_flow.py` (conversation),
+`pages/CarePages.jsx`, `pages/StaffCarePages.jsx`; migration `0009_care_requests`.
+
+| Request | Who can request | Lifecycle (staff only, validated by the server) |
+|---|---|---|
+| Complaint | Any signed-in customer; order and item optional | open → under_review ⇄ awaiting_customer → resolved; rejected / closed need a reason |
+| Return | Delivered orders within the store's own policy window (60 days Summit Trail, 30 days Bloom & Brew, parsed from the returns policy) | requested → under_review → approved / rejected → received → inspected → completed |
+| Refund (**simulated**) | Orders with a recorded successful sandbox payment | requested → under_review → approved / rejected → simulated_completed. No payment provider is called and no money moves |
+| Human help | Any signed-in customer; order optional | open → assigned → in_progress ⇄ awaiting_customer → resolved / closed. Recorded for staff review — never presented as a live agent |
+
+- Customers can reply (a reply moves "waiting for your reply" back to staff) and withdraw a request only before staff start on it.
+- One open request per kind per order item; double submissions are absorbed with an Idempotency-Key.
+- Staff can assign (this store's staff only), add internal notes (never shown to customers), message the customer,
+  and change the status; every change is in the request history; status changes and messages queue an update e-mail
+  (`email.care_update`, sent by `app.worker`; development: `.run/outbox/`).
+- Submitting a return never changes the order; staff still record returns with the existing order actions.
+- **In the chat**, Scout and Maple recognise these requests in Tamil, English and Hindi, ask for what's missing
+  (order → item → reason → description), show a review and submit only after an explicit "yes" / ஆம் / हाँ or the
+  Confirm button; the reply quotes the reference the database returned. "What is the status of my complaint?" is
+  answered from the customer's own requests. Policy questions ("what is the return policy?") still get the policy.
+
+## Not supported by the system (documented, not simulated)
+Refund payouts (refunds are a simulated record only), return labels, exchanges, order or address edits after placing,
+account edits or deletion, invoices, discount codes, live chat with a person or callbacks, real e-mail delivery,
+real payments, real phone calls.
 
 **Policy text vs. the app:** Summit Trail Co.'s returns policy says "Return shipping is free with the prepaid label
 from your account", but the app has no return labels. The assistant quotes the policy and says that returns are
@@ -115,8 +139,9 @@ stack (not a physical microphone).
 - **Model replies** (English policy/greeting/contact only) are rejected if they contain placeholders, links or markdown, prices,
   numbers or rupee amounts not in the facts, catalogue products the answer didn't include, sign-in demands the draft didn't make,
   or more than a few words that appear nowhere in the facts or the question.
-- **Budgets**: ₹ / Rs. / INR / rupees (also Tamil and Hindi forms) are recognised. The catalogue is priced in USD and no exchange
-  rate is configured, so a rupee budget is explained and not applied — never converted with a guessed rate.
+- **Budgets**: ₹ / Rs. / INR / rupees (also Tamil and Hindi forms) are recognised and applied directly to the INR
+  demonstration prices. A budget in another currency (e.g. dollars) is explained and not applied — never converted with a
+  guessed rate.
 - **Tickets**: no ticket system exists; ticket requests get an honest answer and the store's support e-mail and hours.
 - **Each assistant's voice**: catalogue answers open with Scout's or Maple's own introduction; Scout adds a safety note for
   harsh-conditions questions, Maple notes that caffeine/allergen/health data isn't in the listings.

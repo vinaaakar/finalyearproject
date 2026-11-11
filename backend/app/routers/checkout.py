@@ -10,7 +10,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request, Re
 from .. import commerce
 from ..assistant.service import public_order
 from ..commerce import CartOwner
+from .. import repositories as repo
 from ..deps import StorePath, rate_limit, require_customer
+from ..markets import MARKETS
+from ..pricing import currency_for_country, price_list_status
+from ..shipping_zones import configured, rates_for
 from ..schemas import CheckoutRequest, QuoteRequest, SandboxCompleteRequest
 from ..security import Principal
 
@@ -20,10 +24,34 @@ OrderNumber = Annotated[str, Path(pattern=r"^[A-Za-z]{2}-\d{5}$")]
 Customer = Annotated[Principal, Depends(require_customer)]
 
 
+@router.get("/checkout/address-options")
+def address_options(store_id: StorePath, principal: Customer, request: Request):
+    """Countries this store's checkout offers, each with its address rules (regions, postal format, phone), whether
+    delivery rates exist for it, and the default: the customer's last order country, else the store's default."""
+    s = request.app.state.settings
+    prices = price_list_status(store_id)["currencies"]
+    countries = [{**MARKETS[c].public(), "shipping_configured": configured(store_id, s.shipping_config_dir, c),
+                  "currency": currency_for_country(store_id, c),
+                  "prices_configured": prices.get(currency_for_country(store_id, c), {}).get("complete", False)}
+                 for c in s.checkout_countries]
+    last = repo.last_order_country(store_id, principal.customer_id)
+    default = last if last in s.checkout_countries else s.default_checkout_country.get(store_id.value, s.checkout_countries[0])
+    return {"countries": countries, "default_country": default}
+
+
 @router.post("/checkout/quote")
-def quote(store_id: StorePath, body: QuoteRequest, principal: Customer):
-    """Order review: the server's prices, shipping and total for the current cart."""
-    return {"cart": commerce.get_cart(store_id, CartOwner(customer_id=principal.customer_id), body.shipping_method)}
+def quote(store_id: StorePath, body: QuoteRequest, principal: Customer, request: Request):
+    """Order review: the server's prices, shipping and total for the current cart — for the destination if given
+    (no destination = the store's US rates, as before)."""
+    owner = CartOwner(customer_id=principal.customer_id)
+    market = request.app.state.settings.store_markets.get(store_id.value, "US")
+    if body.destination is None and market == "US":
+        return {"cart": commerce.get_cart(store_id, owner, body.shipping_method)}
+    from ..schemas import Destination
+    d = body.destination or Destination(country=market)     # India store: priced in ₹, shipping once the address is known
+    rates = rates_for(store_id, request.app.state.settings.shipping_config_dir, d.country, d.region, d.postal_code)
+    method = body.shipping_method if rates and (body.shipping_method == "standard" or rates.get("expedited_shipping_cents") is not None) else "standard"
+    return {"cart": commerce.get_cart(store_id, owner, method, rates=rates, country=d.country)}
 
 
 @router.post("/checkout", status_code=201)
@@ -32,10 +60,13 @@ def checkout(
     body: CheckoutRequest,
     principal: Customer,
     response: Response,
+    request: Request,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", pattern=r"^[A-Za-z0-9_-]{16,64}$")],
 ):
-    order, created = commerce.place_order(store_id, principal.customer_id, idempotency_key, body.shipping.model_dump(),
-                                          body.shipping_method, body.expected_total_cents)
+    a = body.shipping
+    rates = rates_for(store_id, request.app.state.settings.shipping_config_dir, a.country, a.region, a.postal_code)
+    order, created = commerce.place_order(store_id, principal.customer_id, idempotency_key, a.model_dump(),
+                                          body.shipping_method, body.expected_total_cents, rates=rates)
     if not created:
         response.status_code = 200
     return {"order": public_order(order), "created": created}

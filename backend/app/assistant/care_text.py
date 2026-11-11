@@ -8,6 +8,32 @@ action happened; actions are confirmed separately, by the API, after the custome
 from __future__ import annotations
 
 CARE: dict[str, dict[str, str]] = {
+    # ---- India store (selling in ₹): prices from the approved list only; never converted ----------------------------
+    "price_not_set": {
+        "ta": "₹ விலை இன்னும் அமைக்கப்படவில்லை",
+        "en": "price in ₹ not set yet",
+        "hi": "₹ में कीमत अभी तय नहीं",
+    },
+    "cart_contents_in": {
+        "ta": "உங்கள் கார்ட்டில்: {lines}. துணைத் தொகை {subtotal}; டெலிவரி கட்டணம் செக்அவுட்டில் உங்கள் முகவரியைப் பொறுத்து சேர்க்கப்படும்.",
+        "en": "Your cart has {lines}. Subtotal {subtotal}; delivery is added at checkout, based on your address.",
+        "hi": "आपके कार्ट में: {lines}। सबटोटल {subtotal}; डिलीवरी शुल्क चेकआउट पर आपके पते के आधार पर जोड़ा जाएगा।",
+    },
+    "cart_unpriced": {
+        "ta": "உங்கள் கார்ட்டில்: {lines}. இவற்றுக்கு ₹ விலை இன்னும் அமைக்கப்படவில்லை, எனவே செக்அவுட் செய்ய இயலாது: {names}.",
+        "en": "Your cart has {lines}. These items don't have a price in ₹ set yet, so the cart can't be checked out: {names}.",
+        "hi": "आपके कार्ट में: {lines}। इनकी ₹ में कीमत अभी तय नहीं है, इसलिए चेकआउट नहीं हो सकता: {names}।",
+    },
+    "checkout_steps_in": {
+        "ta": "செக்அவுட் செய்ய: உங்கள் கார்ட்டைத் திறந்து Checkout-ஐத் தேர்ந்தெடுங்கள், உள்நுழையுங்கள் அல்லது கணக்கு உருவாக்குங்கள் (கார்ட் அப்படியே இருக்கும்), இந்திய டெலிவரி முகவரியை உள்ளிடுங்கள் (மாநிலம் அல்லது யூனியன் பிரதேசம், 6 இலக்க PIN குறியீடு, +91 மொபைல் எண்), ஆர்டரைச் சரிபார்த்து வையுங்கள், பிறகு சோதனைப் பணத்தை முடியுங்கள். பணம் சரிபார்க்கப்பட்ட பிறகே ஆர்டர் உறுதியாகும்.",
+        "en": "To check out: open your cart, select Checkout, sign in or create an account (your cart is kept), enter an Indian delivery address (state or union territory, 6-digit PIN code and a +91 mobile number), review and place the order, then complete the test payment. An order is confirmed only after the payment is verified.",
+        "hi": "चेकआउट के लिए: अपना कार्ट खोलें, Checkout चुनें, साइन इन करें या अकाउंट बनाएँ (कार्ट बना रहेगा), भारत का डिलीवरी पता डालें (राज्य या केंद्र शासित प्रदेश, 6 अंकों का PIN कोड और +91 मोबाइल नंबर), ऑर्डर देखकर दें, फिर टेस्ट भुगतान पूरा करें। भुगतान की जाँच के बाद ही ऑर्डर पक्का होता है।",
+    },
+    "checkout_errors_in": {
+        "ta": " பொதுவான செய்திகள்: PIN குறியீடு சரியாக 6 இலக்கமாக இருக்க வேண்டும்; மொபைல் எண் 10 இலக்க இந்திய எண்ணாக (+91) இருக்க வேண்டும்; “total changed” என்றால் விலை அல்லது ஸ்டாக் மாறியுள்ளது — ஆர்டரை மீண்டும் சரிபார்த்து முயற்சியுங்கள்.",
+        "en": " Common messages: a PIN code needs exactly 6 digits; the mobile number must be a 10-digit Indian number (+91); “the total changed” means a price or stock level changed — review the order and try again.",
+        "hi": " आम संदेश: PIN कोड ठीक 6 अंकों का होना चाहिए; मोबाइल नंबर 10 अंकों का भारतीय नंबर (+91) होना चाहिए; “total changed” का मतलब है कीमत या स्टॉक बदल गया — ऑर्डर दोबारा देखकर फिर कोशिश करें।",
+    },
     # ---- orders & delivery ---------------------------------------------------------------------
     "late_on_track": {
         "ta": "ஆர்டர் {number} இன்னும் சரியான நேரத்தில் உள்ளது — {date}-க்குள் வந்து சேரும் என எதிர்பார்க்கப்படுகிறது.",
@@ -136,6 +162,26 @@ CARE: dict[str, dict[str, str]] = {
         "ta": "ஆர்டர் {number} பணத்திற்காகக் காத்திருக்கிறது; இதுவரை எந்தப் பணமும் பதிவாகவில்லை.",
         "en": "Order {number} is waiting for payment, and no payment has been recorded yet.",
         "hi": "ऑर्डर {number} भुगतान की प्रतीक्षा में है, और अभी तक कोई भुगतान दर्ज नहीं हुआ है।",
+    },
+    "order_amount": {
+        "ta": "ஆர்டர் {number}-இன் மொத்தத் தொகை {total}.",
+        "en": "Order {number} came to {total} in total.",
+        "hi": "ऑर्डर {number} की कुल राशि {total} है।",
+    },
+    "order_amount_paid": {
+        "ta": " அதற்கு {amount} பணம் செலுத்தப்பட்டதாகப் பதிவாகியுள்ளது.",
+        "en": " A payment of {amount} is recorded for it.",
+        "hi": " इसके लिए {amount} का भुगतान दर्ज है।",
+    },
+    "order_amount_unpaid": {
+        "ta": " அதற்கு இன்னும் பணம் செலுத்தப்படவில்லை.",
+        "en": " It hasn't been paid yet.",
+        "hi": " इसका भुगतान अभी नहीं हुआ है।",
+    },
+    "order_amount_no_record": {
+        "ta": " அதற்கான பணம் செலுத்திய பதிவு எதுவும் சேமிக்கப்படவில்லை.",
+        "en": " No payment record is stored for it.",
+        "hi": " इसके भुगतान का कोई रिकॉर्ड सहेजा नहीं गया है।",
     },
     "pay_ok": {
         "ta": "ஆர்டர் {number}-க்கான பணம் ({amount}) உறுதிப்படுத்தப்பட்டது; ஆர்டர் {status}.",
@@ -342,6 +388,15 @@ CARE: dict[str, dict[str, str]] = {
         "en": "Sorry it isn't working. Please try: refreshing the page, checking your internet connection, signing out and back in, or another browser. If an item won't add, it may be out of stock or at the 10-per-item limit. If it keeps happening, email {email} with what you clicked and the exact message you saw.",
         "hi": "माफ़ कीजिए कि यह काम नहीं कर रहा। कृपया आज़माएँ: पेज रीफ़्रेश करें, इंटरनेट कनेक्शन जाँचें, साइन आउट करके फिर साइन इन करें, या दूसरा ब्राउज़र। अगर कोई सामान नहीं जुड़ रहा, तो वह स्टॉक से बाहर हो सकता है या 10 की सीमा तक पहुँच गया हो। अगर बार-बार हो, तो आपने क्या क्लिक किया और कौन-सा संदेश दिखा, यह लिखकर {email} पर भेजें।",
     },
+    # Phase A: never invent an address, phone number, tax ID or legal entity (none is published in this system).
+    "business_info": {
+        "ta": "{store} இந்த அமைப்பில் கடை முகவரி, தொலைபேசி எண், ஜிஎஸ்டி/வரி பதிவு விவரங்களை இன்னும் வெளியிடவில்லை, எனவே அவற்றை "
+              "என்னால் சொல்ல முடியாது. {store} குழுவை {email}-இல் தொடர்பு கொள்ளலாம் ({hours}).",
+        "en": "{store} hasn't published a store address, phone number or GST/tax registration details in this system yet, so I "
+              "can't give you those. You can reach the {store} team at {email} ({hours}).",
+        "hi": "{store} ने इस सिस्टम में अभी दुकान का पता, फ़ोन नंबर या GST/टैक्स पंजीकरण की जानकारी प्रकाशित नहीं की है, इसलिए मैं "
+              "वह नहीं बता सकता। {store} टीम से {email} पर संपर्क करें ({hours})।",
+    },
     "bulk": {
         "ta": "மொத்த அல்லது நிறுவன ஆர்டர்களுக்கு {email}-ஐத் தொடர்பு கொள்ளுங்கள் ({hours}). ஆன்லைன் ஆர்டர்களில் ஒவ்வொரு பொருளிலும் அதிகபட்சம் 10 மட்டுமே.",
         "en": "For bulk or business orders, please email {email} ({hours}). Online orders are limited to 10 of each item.",
@@ -385,6 +440,31 @@ CARE: dict[str, dict[str, str]] = {
         "en": "Cheaper than the {name} ({price}): ",
         "hi": "{name} ({price}) से सस्ते: ",
     },
+    "cheapest_found": {
+        "ta": "ஸ்டாக்கில் உள்ளவற்றில் மிகக் குறைந்த விலை: {name} — {price}.",
+        "en": "The lowest-priced one we have in stock is the {name} — {price}.",
+        "hi": "स्टॉक में सबसे सस्ता: {name} — {price}।",
+    },
+    "cheapest_next": {
+        "ta": " அடுத்தவை: {list}.",
+        "en": " Next: {list}.",
+        "hi": " इसके बाद: {list}।",
+    },
+    "cheapest_sold_out": {
+        "ta": " {name} ({price}) இன்னும் மலிவானது, ஆனால் இப்போது ஸ்டாக்கில் இல்லை.",
+        "en": " The {name} ({price}) costs less but is out of stock right now.",
+        "hi": " {name} ({price}) और सस्ता है, लेकिन अभी स्टॉक में नहीं है।",
+    },
+    "cheapest_over_budget": {
+        "ta": "{budget}-க்குள் அந்த வகையில் எதுவும் இல்லை. ஸ்டாக்கில் உள்ளவற்றில் மிகக் குறைந்த விலை: {name} — {price}.",
+        "en": "Nothing of that kind is within {budget}. The lowest-priced one in stock is the {name} — {price}.",
+        "hi": "{budget} के अंदर उस तरह का कोई प्रोडक्ट नहीं है। स्टॉक में सबसे सस्ता: {name} — {price}।",
+    },
+    "cheapest_none": {
+        "ta": "அந்த வகையில் இப்போது ஸ்டாக்கில் எதுவும் இல்லை ({name} உட்பட).",
+        "en": "Nothing of that kind is in stock right now (including the {name}).",
+        "hi": "उस तरह का कोई प्रोडक्ट अभी स्टॉक में नहीं है ({name} भी नहीं)।",
+    },
     "cheaper_which": {
         "ta": "எந்தப் பொருளுக்கு மலிவான மாற்று வேண்டும்?",
         "en": "Which product would you like a cheaper option for?",
@@ -410,6 +490,43 @@ CARE: dict[str, dict[str, str]] = {
         "en": "The {name} is in stock ({price} each). Tap “{button}” to add it — I'll confirm once your cart is updated.",
         "hi": "{name} स्टॉक में है ({price} प्रति)। जोड़ने के लिए “{button}” दबाएँ — कार्ट अपडेट होते ही मैं पुष्टि करूँगा।",
     },
+    # Phase H+: attribute questions and conversational cart removal.
+    "attr_catalogue": {
+        "ta": "{name} பற்றி எங்கள் பட்டியலில் உள்ள விவரம் (ஆங்கிலத்தில்): “{desc}”. இதைத் தவிர {attr} விருப்பங்கள் குறிப்பிடப்படவில்லை, அதனால் நான் ஊகிக்க மாட்டேன்.",
+        "en": "Our catalogue describes the {name} as: “{desc}”. It doesn't list other {attr} options, so I won't guess.",
+        "hi": "हमारी सूची में {name} के बारे में यह लिखा है (अंग्रेज़ी में): “{desc}”। इसके अलावा कोई {attr} विकल्प नहीं बताए गए हैं, इसलिए मैं अंदाज़ा नहीं लगाऊँगा।",
+    },
+    "attr_weight": {
+        "ta": "எங்கள் பட்டியலின்படி {name}-இன் எடை {weight}.",
+        "en": "According to our catalogue, the {name} weighs {weight}.",
+        "hi": "हमारी सूची के अनुसार {name} का वज़न {weight} है।",
+    },
+    "attr_weight_missing": {
+        "ta": "எங்கள் பட்டியலில் {name}-இன் எடை குறிப்பிடப்படவில்லை, அதனால் நான் ஊகிக்க மாட்டேன்.",
+        "en": "Our catalogue doesn't list the weight of the {name}, so I won't guess.",
+        "hi": "हमारी सूची में {name} का वज़न नहीं लिखा है, इसलिए मैं अंदाज़ा नहीं लगाऊँगा।",
+    },
+    "attr_which": {
+        "ta": "எந்தப் பொருளின் {attr} பற்றிக் கேட்கிறீர்கள்? பொருளின் பெயரைச் சொல்லுங்கள்.",
+        "en": "Which product's {attr} would you like to know about? Tell me its name.",
+        "hi": "किस प्रोडक्ट के {attr} के बारे में जानना है? उसका नाम बताइए।",
+    },
+    "remove_empty": {
+        "ta": "உங்கள் கார்ட் காலியாக உள்ளது — நீக்க எதுவும் இல்லை.",
+        "en": "Your cart is empty — there's nothing to remove.",
+        "hi": "आपका कार्ट खाली है — हटाने के लिए कुछ नहीं है।",
+    },
+    "remove_which": {
+        "ta": "எதை நீக்க வேண்டும்? உங்கள் கார்ட்டில்: {list}.",
+        "en": "Which one should I remove? Your cart has: {list}.",
+        "hi": "कौन-सा हटाना है? आपके कार्ट में: {list}।",
+    },
+    "remove_confirm": {
+        "ta": "உங்கள் கார்ட்டில் {name} ({qty}) உள்ளது. நீக்க “{button}” பொத்தானைத் தட்டுங்கள்.",
+        "en": "Your cart has the {name} (quantity {qty}). Tap “{button}” to remove it.",
+        "hi": "आपके कार्ट में {name} ({qty}) है। हटाने के लिए “{button}” दबाएँ।",
+    },
+    "btn_remove": {"ta": "{name} நீக்கு", "en": "Remove {name}", "hi": "{name} हटाएँ"},
     "add_which": {
         "ta": "எந்தப் பொருளைச் சேர்க்க வேண்டும்? இவை கிடைத்தன: {list}.",
         "en": "Which one would you like to add? I found: {list}.",
@@ -592,4 +709,13 @@ ADVICE_LIMITS: dict[str, dict] = {
               "listings.",
         "hi": "मैं सिर्फ़ प्रोडक्ट विवरण के आधार पर बता सकता हूँ — कैफ़ीन की मात्रा, एलर्जी या सेहत से जुड़ी जानकारी हमारी लिस्टिंग में नहीं है।",
     },
+}
+
+
+ATTRIBUTE_NAMES: dict[str, dict[str, str]] = {
+    "colour": {"ta": "நிற", "en": "colour", "hi": "रंग"},
+    "size": {"ta": "அளவு", "en": "size", "hi": "साइज़"},
+    "flavour": {"ta": "சுவை", "en": "flavour", "hi": "स्वाद"},
+    "material": {"ta": "பொருள்", "en": "material", "hi": "सामग्री"},
+    "weight": {"ta": "எடை", "en": "weight", "hi": "वज़न"},
 }

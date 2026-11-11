@@ -34,5 +34,5 @@ async def chat(
     acoustic = verify_receipt(request.app.state.settings.secret_key, body.speech_receipt, store_id.value, body.message)
     result = await run_in_threadpool(partial(assistant.answer, store_id, body.message, principal, history, owner,
                                              conversation_language=body.conversation_language, acoustic=acoustic,
-                                             language_override=body.language_override))
+                                             language_override=body.language_override, care_draft=body.care_draft))
     return ChatResponse(**result.__dict__)

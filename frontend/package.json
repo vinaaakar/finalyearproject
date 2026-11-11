@@ -1,11 +1,22 @@
 {
   "name": "avc-frontend",
   "private": true,
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev:a": "npm run dev -w store-a",
     "dev:b": "npm run dev -w store-b",
-    "build": "npm run build -w store-a && npm run build -w store-b"
+    "build": "npm run build -w store-a && npm run build -w store-b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:journey": "playwright test customer-journey",
+    "test:e2e:mobile": "playwright test mobile",
+    "test:e2e:a11y": "playwright test a11y keyboard",
+    "test:e2e:cookies": "AVC_E2E_AUTH_COOKIES=1 playwright test cookie-session customer-journey",
+    "test:e2e:voice": "AVC_E2E_SPEECH=1 playwright test e2e/voice.spec"
   },
   "dependencies": {
     "react": "18.3.1",
@@ -13,7 +24,16 @@
     "react-router-dom": "6.28.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.1",
+    "@playwright/test": "1.49.1",
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.1.0",
+    "@testing-library/user-event": "14.5.2",
     "@vitejs/plugin-react": "4.3.4",
-    "vite": "5.4.11"
+    "axe-core": "4.10.2",
+    "jsdom": "25.0.1",
+    "vite": "5.4.11",
+    "vitest": "2.1.9"
   }
 }

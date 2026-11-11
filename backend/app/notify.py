@@ -1,15 +1,22 @@
-"""Outbound email adapters (used for password-reset links).
+"""Outbound email adapters (password-reset links, order-shipped notices via the worker's outbox).
 
-No real email service is configured. In development, messages are written to
-`.run/outbox/` (git-ignored, owner-read-only files) so the reset flow can be tried
-locally; nothing is sent over the network. Message bodies are never logged.
+- `dev_outbox` (development default): messages are written to `.run/outbox/` (git-ignored, owner-read-only files);
+  nothing is sent over the network.
+- `smtp` (production, Phase J): any SMTP relay / transactional provider (Amazon SES, Postmark, Mailgun, a company
+  server…) configured by EMAIL_DELIVERY=smtp + SMTP_HOST/PORT/USERNAME/PASSWORD/FROM. Not enabled anywhere until those
+  credentials are supplied; STARTTLS (or implicit TLS on port 465) is required, plain-text SMTP is refused.
+- `none`: delivery disabled (logged).
+Message bodies, recipients and credentials are never logged.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import smtplib
+import ssl
 import time
+from email.message import EmailMessage
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -66,5 +73,47 @@ class MemorySender:
         self.sent.append((store, email))
 
 
-def build_sender(kind: str) -> EmailSender:
-    return DevOutboxSender() if kind == "dev_outbox" else DisabledSender()
+@dataclass(frozen=True)
+class SmtpConfig:
+    host: str
+    port: int
+    username: str
+    password: str
+    sender: str               # "Summit Trail Co. <orders@example.org>" — must be a domain you control (SPF/DKIM/DMARC)
+    timeout: float = 15.0
+
+
+class SmtpSender:
+    name = "smtp"
+
+    def __init__(self, config: SmtpConfig, smtp_factory=None):
+        self.config = config
+        self._factory = smtp_factory
+
+    def send(self, store: str, email: Email) -> None:
+        msg = EmailMessage()
+        msg["From"], msg["To"], msg["Subject"] = self.config.sender, email.to, email.subject
+        msg.set_content(email.body)
+        ctx = ssl.create_default_context()
+        c = self.config
+        if self._factory:
+            client = self._factory(c.host, c.port, c.timeout)
+        elif c.port == 465:
+            client = smtplib.SMTP_SSL(c.host, c.port, timeout=c.timeout, context=ctx)
+        else:
+            client = smtplib.SMTP(c.host, c.port, timeout=c.timeout)
+        with client:
+            if c.port != 465:
+                client.starttls(context=ctx)          # refuses to continue without TLS (raises if unsupported)
+            if c.username:
+                client.login(c.username, c.password)
+            client.send_message(msg)
+        log.info("email sent via smtp store=%s", store)
+
+
+def build_sender(kind: str, settings=None) -> EmailSender:
+    if kind == "dev_outbox":
+        return DevOutboxSender()
+    if kind == "smtp" and settings is not None and settings.smtp is not None:
+        return SmtpSender(settings.smtp)
+    return DisabledSender()

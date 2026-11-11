@@ -1,0 +1,10 @@
+# systemd: daily backup + encrypted offsite copy. Install with backup-offsite.timer; adjust paths.
+[Unit]
+Description=AI Voice Commerce database backup + encrypted offsite copy
+After=docker.service
+
+[Service]
+Type=oneshot
+User=avc-deploy
+WorkingDirectory=/opt/ai-voice-commerce
+ExecStart=/bin/sh -c 'scripts/backup_db.sh && scripts/backup_offsite.sh --from "$(ls -d backups/db-* | sort | tail -1)" --dest /mnt/offsite/avc --key-file /etc/avc/backup.key --keep 30'

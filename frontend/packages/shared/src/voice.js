@@ -81,6 +81,7 @@ const SPEECH_RMS = 0.015;      // level treated as speech
 const END_SILENCE_MS = 1200;   // stop this long after the speaker goes quiet
 const NO_SPEECH_MS = 6000;     // give up if nothing is said
 const MAX_MS = 15000;          // hard cap per utterance
+const TRANSCRIBE_TIMEOUT_MS = 45000; // the server engine has its own 30 s limit; never wait forever on the network
 
 function downsample(samples, fromRate) {
   if (fromRate === TARGET_RATE) return samples;
@@ -111,7 +112,8 @@ export function encodeWav(samples, rate = TARGET_RATE) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
-export function createServerRecognizer({ transcribe, language = 'auto', onInterim, onFinal, onError, onEnd }) {
+export function createServerRecognizer({ transcribe, language = 'auto', onInterim, onFinal, onError, onEnd,
+  transcribeTimeoutMs = TRANSCRIBE_TIMEOUT_MS }) {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof AudioContext === 'undefined') return null;
   let stream, ctx, node, source, timer;
   let chunks = [], finished = false, heardSpeech = false, quietMs = 0, startedAt = 0;
@@ -140,7 +142,14 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
       for (const c of chunks) { merged.set(c, off); off += c.length; }
       onInterim?.('transcribing');
       const audio = encodeWav(downsample(merged, rate));
-      const result = await transcribe(audio, language);
+      let timeoutId;
+      const timedOut = new Promise((_, reject) => { timeoutId = setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), transcribeTimeoutMs); });
+      let result;
+      try {
+        result = await Promise.race([transcribe(audio, language), timedOut]);
+      } finally {
+        clearTimeout(timeoutId);
+      }
       const text = (result.text || '').trim();
       onInterim?.('');
       if (text) {
@@ -148,7 +157,8 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
           uncertain: result.uncertain, receipt: result.speech_receipt, audio });
       } else onError?.('no-speech');
     } catch (e) {
-      onError?.('failed', e?.message);
+      if (e?.code === 'timeout' || e?.code === 'network') onError?.('network');
+      else onError?.('failed', e?.message);
     } finally {
       chunks = [];
       onEnd?.();
@@ -234,6 +244,17 @@ function voicesSoon(timeoutMs) {
 
 export const speaker = {
   audio: null,
+  // Incremented by every cancel(): a speak() still waiting for voices or server audio checks it before making a sound,
+  // so a reply never starts after the customer interrupted it (pressed the mic, closed the chat, sent a new message).
+  generation: 0,
+  // Speaking state for the UI ("Scout is speaking — Stop"): set from the real start/end of playback.
+  speaking: false,
+  onChange: null,
+  setSpeaking(v) {
+    if (this.speaking === v) return;
+    this.speaking = v;
+    this.onChange?.(v);
+  },
   get supported() {
     return voiceSupport().synthesis;
   },
@@ -243,16 +264,23 @@ export const speaker = {
    */
   async speak(text, lang, { serverTts, rate = 1 } = {}) {
     this.cancel();
+    const gen = this.generation;
+    const interrupted = () => gen !== this.generation;
     if (!text) return { mode: 'none', voice: null };
     const bcp47 = LANGUAGES[lang]?.bcp47 || lang;
     if (this.supported) {
       let voice = pickVoice(window.speechSynthesis.getVoices(), bcp47);
       if (!voice) voice = pickVoice(await voicesSoon(1500), bcp47);
+      if (interrupted()) return { mode: 'cancelled', voice: null };
       if (voice) {
         const u = new SpeechSynthesisUtterance(text);
         u.voice = voice;
         u.lang = voice.lang;
         u.rate = rate;
+        const done = () => { if (gen === this.generation) this.setSpeaking(false); };
+        u.onend = done;
+        u.onerror = done;
+        this.setSpeaking(true);
         window.speechSynthesis.speak(u);
         return { mode: 'browser', voice: voice.name };
       }
@@ -260,8 +288,14 @@ export const speaker = {
     if (serverTts) {
       try {
         const blob = await serverTts(text, lang);
-        this.audio = new Audio(URL.createObjectURL(blob));
-        await this.audio.play();
+        if (interrupted()) return { mode: 'cancelled', voice: null };
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.addEventListener('ended', () => { URL.revokeObjectURL(url); if (gen === this.generation) this.setSpeaking(false); }, { once: true });
+        audio.objectUrl = url;
+        this.audio = audio;
+        this.setSpeaking(true);
+        await audio.play();
         return { mode: 'server', voice: null };
       } catch {
         /* fall through to text only */
@@ -270,9 +304,12 @@ export const speaker = {
     return { mode: 'none', voice: null };
   },
   cancel() {
+    this.generation += 1;
+    this.setSpeaking(false);
     if (this.supported) window.speechSynthesis.cancel();
     if (this.audio) {
       this.audio.pause();
+      if (this.audio.objectUrl) URL.revokeObjectURL(this.audio.objectUrl);
       this.audio = null;
     }
   },

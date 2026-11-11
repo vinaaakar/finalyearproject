@@ -106,10 +106,14 @@ for _name, _words in _KEYWORDS_I18N.items():
 
 # Tamil / Hindi product words → English catalog search terms (the catalogs are in English).
 PRODUCT_LEXICON: dict[str, str] = {
+    # Spoken/colloquial spellings that speech recognition produces (Phase H+): "காப்பி" is how காபி is said, "கொட்டை" (seed) is the everyday word for coffee beans.
+    "காப்பி": "coffee", "காஃபி": "coffee", "கொட்டை": "bean", "बीन": "bean", "कोफी": "coffee",
     "இரண்டு பேர்": "2-person", "2 பேர்": "2-person", "இருவர்": "2-person", "நான்கு பேர்": "4-person",
     "दो लोगों": "2-person", "दो लोग": "2-person", "2 लोगों": "2-person", "चार लोगों": "4-person",
     "கூடாரம்": "tent", "டென்ட்": "tent", "टेंट": "tent", "तंबू": "tent",
-    "ஸ்லீப்பிங் பேக்": "sleeping", "தூக்கப் பை": "sleeping", "स्लीपिंग बैग": "sleeping",
+    # A sleeping bag is "sleeping" + "bag" (as in English), never the "bag" → pack mapping below.
+    "ஸ்லீப்பிங் பேக்": "sleeping bag", "ஸ்லீப்பிங் பை": "sleeping bag", "தூக்கப் பை": "sleeping bag", "தூக்கப்பை": "sleeping bag",
+    "தூங்கும் பை": "sleeping bag", "स्लीपिंग बैग": "sleeping bag", "स्लीपिंग बेग": "sleeping bag", "सोने का बैग": "sleeping bag",
     "மெத்தை": "pad", "पैड": "pad",
     "பேக்பேக்": "pack", "முதுகுப் பை": "pack", "பை": "pack", "बैकपैक": "pack", "बैग": "pack",
     "பூட்ஸ்": "boot", "காலணி": "boot", "ஷூ": "boot", "जूते": "boot", "बूट": "boot",
@@ -131,7 +135,8 @@ _STOPWORDS = set(
     items product products store shop order orders today now one ones help question under below less dollar dollars
     gift gifts idea ideas around cheaper max maximum most budget spend add put cart basket take compare comparison
     versus difference differences between better which similar alternative alternatives instead else options
-    other another cheapest affordable expensive lower within rupee rupees inr usd anything everything""".split()
+    other another cheapest affordable expensive lower within rupee rupees inr usd anything everything
+    lowest lowest-priced lowest-price priced least weight weigh weighs heavy""".split()
 ) | {w for words in ROMANIZED.values() for w in words}
 
 
@@ -211,13 +216,14 @@ CARE_KEYWORDS: dict[str, tuple[str, ...]] = {
                 "which one is better", "which one should i", "which should i",
                 "ஒப்பிட", "வித்தியாசம்", "எது சிறந்தது", "तुलना", "फ़र्क", "फर्क", "अंतर", "कौन सा बेहतर", "कौन-सा बेहतर"),
     "cheaper": ("cheaper", "less expensive", "lower price", "more affordable", "budget option", "cheapest",
+                "lowest-priced", "lowest priced", "lowest-price", "lowest price", "least expensive",
                 "மலிவான", "குறைந்த விலை", "सस्ता", "सस्ती", "कम कीमत", "kam daam"),
     "alternative": ("something similar", "similar", "alternative", "alternatives", "instead", "something else", "other options",
                     "வேறு ஏதாவது", "மாற்று", "இதே மாதிரி", "कोई और", "दूसरा विकल्प", "विकल्प", "इसके जैसा"),
     "promotions": ("promo", "promotion", "promotions", "discount", "discounts", "coupon", "coupons", "voucher", "sale", "offers",
                    "special offer", "any offer", "deal", "deals", "தள்ளுபடி", "கூப்பன்", "ஆஃபர்", "छूट", "डिस्काउंट", "कूपन",
                    "ऑफ़र", "ऑफर"),
-    "invoice": ("invoice", "receipt", "bill", "billing", "tax invoice", "gst", "ரசீது", "இன்வாய்ஸ்", "பில்", "बिल", "रसीद", "इनवॉइस"),
+    "invoice": ("invoice", "receipt", "bill", "billing", "tax invoice", "gst invoice", "gst bill", "ரசீது", "இன்வாய்ஸ்", "பில்", "बिल", "रसीद", "इनवॉइस"),
     "privacy": ("privacy", "personal data", "my data", "personal information", "gdpr", "what do you store", "do you record",
                 "recording my", "is my voice", "audio stored", "data stored", "delete my data",
                 "தனியுரிமை", "என் தரவு", "தனிப்பட்ட தகவல்", "गोपनीयता", "प्राइवेसी", "मेरा डेटा", "निजी जानकारी"),
@@ -237,6 +243,15 @@ CARE_KEYWORDS: dict[str, tuple[str, ...]] = {
                     "complaint", "complain",
                     "கோபம்", "ஏமாற்றம்", "மோசம்", "புகார்", "உதவவில்லை", "எரிச்சல்", "गुस्सा", "नाराज़", "नाराज", "बेकार", "शिकायत",
                     "परेशान", "निराश", "बहुत बुरा"),
+    # Business identity the store has not published (address, phone, tax registration, legal entity): answered with
+    # what IS published (name, support email, hours) and a plain statement of what isn't — never invented.
+    "business_info": ("your address", "store address", "shop address", "office address", "company address", "head office",
+                      "where are you located", "where is your store", "where is your shop", "where is your office", "visit your store",
+                      "phone number", "telephone", "contact number", "mobile number", "call you", "whatsapp",
+                      "gst number", "gstin", "gst no", "gst registration", "tax id", "tax number", "pan number",
+                      "registration number", "company registration", "legal name", "registered company", "who owns",
+                      "முகவரி", "தொலைபேசி எண்", "போன் நம்பர்", "ஜிஎஸ்டி எண்", "ஜிஎஸ்டி நம்பர்", "கடை எங்கே",
+                      "पता क्या", "आपका पता", "दुकान कहाँ", "फ़ोन नंबर", "फोन नंबर", "मोबाइल नंबर", "जीएसटी नंबर", "जीएसटी नं"),
     # There is no ticket system: these get an honest "not available" plus the real support contact.
     "ticket": ("support ticket", "ticket", "tickets", "raise a complaint", "file a complaint", "register a complaint", "lodge a complaint",
                "support request", "case number", "case id", "ticket number", "complaint number",
@@ -293,11 +308,46 @@ def sensitive_kind(text: str) -> str | None:
 
 
 # Words that point back at something already discussed ("when will IT arrive?", "இந்த ஆர்டர்", "यह ऑर्डर").
-_REFERS_BACK_RE = re.compile(r"(?<![a-z])(it|its|it's|this|that|these|those|same|the order|that one|this one)(?![a-z])"
-                             r"|இந்த|அந்த|இது|அது|यह|इसका|इसे|इसकी|वह|वो|उसका|उसे|उसकी")
+_REFERS_BACK_RE = re.compile(r"(?<![a-z])(it|its|it's|this|that|these|those|same|them|the order|that one|this one|"
+                             r"the best one|which one|the cheapest one|the first one|the second one|one of them)(?![a-z])"
+                             r"|இந்த|அந்த|இது|அது|இதி|இதன|இதை|இதோ|அதி|அதன|அதை|அதோ|இவற்றி|அவற்றி"
+                             r"|यह|इसका|इसे|इसकी|इसके|इसमें|इसको|वह|वो|उसका|उसे|उसकी|उसके|उसमें|इनमें|इनका")
+# Questions about a property the catalogue may not record (Phase H+: answered from the description, never invented).
+ATTRIBUTE_WORDS: dict[str, tuple[str, ...]] = {
+    "colour": ("colour", "color", "colours", "colors", "நிறம்", "நிறங்கள்", "நிற", "கலர்", "रंग", "कलर"),
+    "size": ("size", "sizes", "dimensions", "how big", "அளவு", "சைஸ்", "साइज़", "साइज", "आकार"),
+    "flavour": ("flavour", "flavor", "flavours", "flavors", "taste", "tasting notes", "சுவை", "சுவைகள்", "स्वाद", "फ्लेवर"),
+    "material": ("material", "made of", "fabric", "பொருளால்", "துணி", "सामग्री", "किस चीज़ से बना", "कपड़ा"),
+    "weight": ("weight", "weigh", "how heavy", "heavy is", "எடை", "वज़न", "वजन"),
+}
+
+
+def attribute_asked(text: str) -> str | None:
+    low = text.lower()
+    return next((k for k, words in ATTRIBUTE_WORDS.items() if any(w in low for w in words)), None)
+
+
+# "remove it from my cart", "கார்ட்டிலிருந்து நீக்கு", "कार्ट से हटा दो"
+_REMOVE_FROM_CART_RE = re.compile(r"(?<![a-z])(remove|delete|take)(?![a-z]).{0,50}(?<![a-z])(cart|basket)(?![a-z])"
+                                  r"|(?<![a-z])(take|remove)(?![a-z]).{0,30}(?<![a-z])out of(?![a-z]).{0,20}(cart|basket)"
+                                  r"|(கார்ட்|கூடை)[^\s]*.{0,40}(நீக்க|நீக்கு|எடு|அகற்று)"
+                                  r"|(कार्ट|टोकरी).{0,40}(हटा|निकाल)")
 _MODIFY_RE = re.compile(r"(?<![a-z])(change|update|edit|correct|fix|modify)(?![a-z]).{0,25}(?<![a-z])(address|order)(?![a-z])")
 _ADD_TO_CART_RE = re.compile(r"(?<![a-z])(add|put|place)(?![a-z]).{0,50}(?<![a-z])(cart|basket)(?![a-z])"
                              r"|(कार्ट|टोकरी).{0,40}(डाल|जोड़)|(கார்ட்|கூடை).{0,40}சேர்")
+
+
+# "What did I pay?" / "How much was my last order?": the customer's own recorded order amount (never a product price).
+_ORDER_AMOUNT_RE = re.compile(
+    r"(?<![a-z])(what|how much) (did|have) i (pay|paid|spend|spent)(?![a-z])"
+    r"|(?<![a-z])how much (was|is|did|were) (my|the) (last |latest |recent |previous )?(order|purchase)s?(?![a-z])"
+    r"|(?<![a-z])how much did (my|the) (last |latest |recent )?(order|purchase) cost(?![a-z])"
+    r"|(?<![a-z])(what|how much) was (my|the) (order )?(total|bill)(?![a-z])"
+    r"|(?<![a-z])(total|amount) (of|for) (my|the) (last |latest |recent )?(order|purchase)(?![a-z])"
+    r"|(?<![a-z])(my|the) order total(?![a-z])|(?<![a-z])amount (i|that i) paid(?![a-z])"
+    r"|எவ்வளவு (பணம் )?(செலுத்தினேன்|கட்டினேன்|கொடுத்தேன்)|ஆர்டர் தொகை|ஆர்டரின் (மொத்த )?தொகை|மொத்த தொகை"
+    r"|कितना (भुगतान|पेमेंट) किया|कितने (पैसे|रुपये) (दिए|चुकाए)|कितना पैसा (दिया|चुकाया)|ऑर्डर (कितने|कितना) का"
+    r"|(ऑर्डर की )?कुल (राशि|रकम)|कितने का (था|ऑर्डर)")
 
 
 def _care_matches(text: str) -> set[str]:
@@ -305,10 +355,17 @@ def _care_matches(text: str) -> set[str]:
     for name, keys in _CARE_RX.items():
         if any((k.search(text) if hasattr(k, "search") else k in text) for k in keys):
             found.add(name)
-    if _ADD_TO_CART_RE.search(text):
+    if _REMOVE_FROM_CART_RE.search(text):
+        found.add("remove_from_cart")
+    elif _ADD_TO_CART_RE.search(text):
         found.add("add_to_cart")
+    if attribute_asked(text):
+        found.add("attribute")
     if _MODIFY_RE.search(text):
         found.add("modify_order")
+    if _ORDER_AMOUNT_RE.search(text):
+        found.add("order_amount")      # a question about the amount, not a payment problem ("பணம் செலுத்தினேன்" = "I paid")
+        found.discard("payment_issue")
     if "refund_status" in found:
         found.discard("order_late")    # "my refund hasn't come" is about money, not a late parcel
     return found
@@ -342,6 +399,7 @@ class Intent:
     sensitive: str | None = None       # card | cvv | password | otp — the customer typed a secret
     refers_back: bool = False          # the message points at something already discussed ("it", "this order")
     keyword_product: bool = False      # a shopping phrase ("do you have…") triggered the product search
+    cheapest: bool = False             # "the cheapest / lowest-priced X": the lowest-priced X, not "cheaper than X"
 
 
 def normalise_order_number(text: str) -> str | None:
@@ -359,23 +417,55 @@ SEARCH_SYNONYMS: dict[str, tuple[str, ...]] = {
     "mat": ("pad",), "mattress": ("pad",), "burner": ("stove",), "cooker": ("stove",), "shelter": ("tent",),
     "cup": ("mug",), "mugs": ("mug",), "pourover": ("dripper", "pour-over"), "pour-over": ("dripper",), "filter": ("dripper",),
     "mill": ("grinder",), "beans": ("bean",), "teapot": ("tea",), "kettle": ("gooseneck",),
+    # Phase H relevance: needs → the category that meets them (still matched only against real rows).
+    "warm": ("sleeping", "bag"), "warmth": ("sleeping", "bag"), "cold": ("sleeping", "bag"), "sleep": ("sleeping",),
+    "people": ("person",), "persons": ("person",),
+    "trek": ("hiking",), "trekking": ("hiking",),
 }
+
+# Occasion words describe who it's for, not what it is: they never narrow a product search ("gift for a hiker").
+_OCCASION_WORDS = {"gift", "gifts", "present", "presents", "birthday", "anniversary", "christmas", "diwali", "pongal",
+                   "someone", "friend", "friends", "hiker", "hikers", "camper", "campers", "lover", "dad", "mom", "father", "mother", "husband", "wife", "brother", "sister"}
+# "hiking bag", "Hi-King bag" (a speech-recognition spelling), "travel bag", or a bag that isn't a sleeping bag.
+_PACK_BAG_RE = re.compile(r"(hiking|hi-?king|trekking|travel|school|camping|trail|day|college|laptop|carry)\s*-?\s*bags?\b"
+                          r"|bag\s*pack|(?<!sleeping )\bbags?\b(?!\s*of)|பேக்|बैग")
+_PARTY_SIZE_RE = re.compile(r"\b(\d{1,2})\s*-?\s*(?:people|persons?|man|men)\b", re.I)
+
+
+# Superlatives ("the cheapest tent") ask for the lowest-priced product of a kind; "cheaper" alone means "cheaper than it".
+_CHEAPEST_RE = re.compile(r"(?<![a-z])(cheapest|lowest[- ]priced?|lowest[- ]cost|least expensive|most affordable)(?![a-z])"
+                          r"|மிகவும் மலிவான|மிக மலிவான|மிகக் குறைந்த விலை|மிக குறைந்த விலை"
+                          r"|सबसे सस्त|सबसे कम (?:कीमत|दाम)")
 
 
 def extract_search_terms(text: str) -> list[str]:
     words = re.findall(r"[a-zA-Z][a-zA-Z\-]{2,}", text.lower())
-    # Tamil / Hindi product words map to English catalog terms (longest phrases first).
+    # Tamil / Hindi product words map to English catalog terms (longest phrases first). A matched phrase is used up, so
+    # the "பை" / "बैग" inside "தூங்கும் பை" / "स्लीपिंग बैग" (sleeping bag) is not also read as a bag (= a pack).
     terms: list[str] = []
+    rest = text
     for phrase in sorted(PRODUCT_LEXICON, key=len, reverse=True):
-        if phrase in text and PRODUCT_LEXICON[phrase] not in terms:
-            terms.append(PRODUCT_LEXICON[phrase])
+        if phrase in rest:
+            rest = rest.replace(phrase, " ")
+            for term in PRODUCT_LEXICON[phrase].split():
+                if term not in terms:
+                    terms.append(term)
     own: list[str] = []
+    pack_phrase = _PACK_BAG_RE.search(rest.lower())
+    if pack_phrase:
+        terms.append("pack")                         # "hiking bag" / "travel bag" → the packs, not the sleeping bag
+    m = _PARTY_SIZE_RE.search(text)
+    if m:
+        terms.append(f"{int(m.group(1))}-person")      # "tent for 4 people" → the "4-Person" product name
     for w in words:
-        if w in _STOPWORDS:
+        if w in _STOPWORDS or w in _OCCASION_WORDS:
             continue
         stem = w[:-1] if w.endswith("s") and len(w) > 4 and not w.endswith("ss") else w
         if stem not in terms and stem not in own:
             own.append(stem)
+    if pack_phrase:   # the phrase's own words ("hiking", "bag") describe the pack; alone they'd match boots and the sleeping bag
+        phrase_words = set(re.findall(r"[a-z][a-z\-]*", pack_phrase.group(0)))
+        own = [w for w in own if w not in phrase_words and w not in ("bag", "bags")]
     terms += own
     if "pour" in own and "over" in text.lower():
         terms.append("dripper")
@@ -402,13 +492,13 @@ def detect_intent(message: str) -> Intent:
         found.add("warranty")
     if care & {"order_late", "delivered_missing", "wrong_item", "missing_item", "cancel", "modify_order", "reorder"}:
         found.add("order_status")
-    if care & {"cheaper", "alternative", "compare", "add_to_cart"}:
+    if care & {"cheaper", "alternative", "compare", "add_to_cart", "attribute"}:
         found.add("product")
     if "add_to_cart" in care:
         found.discard("cart")          # an action on the cart, not "what's in my cart"
     # Words about a problem with an order or the site are not product searches.
     if care & {"payment_issue", "refund_status", "account", "checkout_help", "tech_issue", "promotions", "invoice", "privacy",
-               "languages", "accessibility", "bulk", "frustration", "ticket"} and not care & {"compare", "cheaper", "alternative", "add_to_cart", "care"}:
+               "languages", "accessibility", "bulk", "frustration", "ticket", "business_info"} and not care & {"compare", "cheaper", "alternative", "add_to_cart", "remove_from_cart", "attribute", "care"}:
         found -= {"product", "price", "stock"} if not keyword_product else set()
     if "payment_issue" in care:
         found.discard("payment")       # a payment problem, not the "which cards do you accept" policy
@@ -448,12 +538,16 @@ def detect_intent(message: str) -> Intent:
         found -= {"product", "price", "stock"}
         terms = []
     if care & {"payment_issue", "refund_status", "account", "checkout_help", "tech_issue", "promotions", "invoice", "privacy",
-               "languages", "accessibility", "bulk", "frustration", "ticket", "order_late", "delivered_missing", "cancel", "modify_order",
+               "languages", "accessibility", "bulk", "frustration", "ticket", "business_info", "order_late", "delivered_missing", "cancel", "modify_order",
                "wrong_item", "missing_item", "reorder", "damaged", "defective"} and not keyword_product \
-            and not care & {"compare", "cheaper", "alternative", "add_to_cart", "care"}:
+            and not care & {"compare", "cheaper", "alternative", "add_to_cart", "remove_from_cart", "attribute", "care"}:
         found.discard("product")
         terms = [] if not care & {"damaged", "defective"} else terms
     found |= care
+    if "order_amount" in found:        # the customer's own order amount: no product search, no fee or price list
+        found -= {"product", "price", "stock", "payment", "payment_issue"}
+        terms = []
     return Intent(intents=found, order_number=order_number, search_terms=terms, max_price_cents=max_price_cents,
                   budget_currency=budget.currency if budget else None, raw=message.lower(), script_language=script, quantity=requested_quantity(message),
-                  sensitive=sensitive, keyword_product=keyword_product, refers_back=bool(_REFERS_BACK_RE.search(text)))
+                  sensitive=sensitive, keyword_product=keyword_product, refers_back=bool(_REFERS_BACK_RE.search(text)),
+                  cheapest="cheaper" in found and bool(_CHEAPEST_RE.search(text)))

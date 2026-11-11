@@ -25,7 +25,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1612; --surface: #17211b; --surface-2: #1f2b24; --text: #e7efe9; --muted: #a3b3a8; --border: #2e3d34;
-    --brand: #234f3c; --accent: #ea580c; --link: #86d3a8; --price: #a7e3c0;
+    --brand: #234f3c; --accent: #c2410c; --link: #86d3a8; --price: #a7e3c0;
     --hero-bg: linear-gradient(135deg, #0f241b 0%, #17382a 60%, #1f4d3a 100%);
     --ok: #86efac; --ok-bg: #14532d; --warn: #fcd34d; --warn-bg: #4a3410; --err: #fca5a5; --err-bg: #4c1414; --info: #93c5fd; --info-bg: #1e2f5c;
   }

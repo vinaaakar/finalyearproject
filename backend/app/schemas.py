@@ -13,10 +13,12 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: Literal["bearer"] = "bearer"
+    # Cookie mode (AUTH_COOKIES=true): the token is ONLY in an HttpOnly cookie, never given to page scripts.
+    access_token: str | None
+    token_type: Literal["bearer", "cookie"] = "bearer"
     expires_in: int
     customer: dict
+    csrf_token: str | None = None
 
 
 class ChatTurn(BaseModel):
@@ -34,6 +36,14 @@ class ChatRequest(BaseModel):
     speech_receipt: str | None = Field(default=None, max_length=600, pattern=r"^[0-9a-f]+\.[0-9a-f]{64}$")
     # Set only when the customer explicitly picked a language (e.g. after a clarification). Not detection.
     language_override: Literal["ta", "en", "hi"] | None = None
+    # A customer-care request being put together in this conversation (returned by the server in the previous reply).
+    # Only a convenience: every field is re-validated, and the request is created only after an explicit "yes".
+    care_draft: dict | None = None
+
+    @field_validator("care_draft")
+    @classmethod
+    def small_draft(cls, v):
+        return None if v is not None and len(str(v)) > 3000 else v     # oversized: ignored (the flow starts over)
 
     @field_validator("message")
     @classmethod
@@ -58,6 +68,10 @@ class ChatResponse(BaseModel):
     clarification: bool = False
     # Proposed actions (links; add-to-cart and cancel buttons the customer must tap). Not yet performed.
     actions: list[dict] = []
+    # Customer-care request in progress (send it back with the next message), and the reference of a request the
+    # server has just created (only ever set from the database's own record).
+    care_draft: dict | None = None
+    care_reference: str | None = None
 
 
 class PhoneTurnRequest(BaseModel):
@@ -144,9 +158,12 @@ class ShippingAddress(Strict):
     line1: str = Field(min_length=1, max_length=120)
     line2: str | None = Field(default=None, max_length=120)
     city: str = Field(min_length=1, max_length=80)
-    region: str = Field(pattern=r"^[A-Za-z]{2}$", description="US state code")
-    postal_code: str = Field(pattern=r"^\d{5}(-\d{4})?$")
-    country: Literal["US"] = "US"
+    # Country-specific rules (states / union territories, ZIP vs PIN, phone) are applied by commerce.validate_address
+    # from app/markets.py; the schema only bounds the shape.
+    region: str = Field(pattern=r"^[A-Za-z]{2}$", description="state / union territory code of `country`")
+    postal_code: str = Field(pattern=r"^\d{5}(-\d{4})?$|^\d{6}$", description="US ZIP / ZIP+4 or Indian PIN")
+    country: Literal["US", "IN"] = "US"
+    phone: str | None = Field(default=None, max_length=20, pattern=r"^[+0-9 ().\-]{7,20}$")
 
     @field_validator("full_name", "line1", "line2", "city")
     @classmethod
@@ -165,20 +182,25 @@ class ShippingAddress(Strict):
 
     @field_validator("region")
     @classmethod
-    def us_state(cls, v: str) -> str:
-        from .stores import US_REGIONS
-
-        v = v.upper()
-        if v not in US_REGIONS:
-            raise ValueError("must be a US state code")
-        return v
+    def upper_region(cls, v: str) -> str:
+        # Which codes are valid depends on `country` (US states, Indian states / union territories): checked by
+        # commerce.validate_address with app/markets.py. (A US-only check here once refused every Indian state whose
+        # code isn't also a US one — e.g. Karnataka "KA" — while Tamil Nadu "TN" passed only as Tennessee.)
+        return v.upper()
 
 
 ShippingMethod = Literal["standard", "expedited"]
 
 
+class Destination(Strict):
+    country: Literal["US", "IN"] = "US"
+    region: str | None = Field(default=None, pattern=r"^[A-Za-z]{2}$")
+    postal_code: str | None = Field(default=None, max_length=10)
+
+
 class QuoteRequest(Strict):
     shipping_method: ShippingMethod = "standard"
+    destination: Destination | None = None      # omitted = the store's US rates, exactly as before
 
 
 class CheckoutRequest(Strict):

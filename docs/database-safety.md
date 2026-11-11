@@ -38,20 +38,25 @@ row counts only. Each further run creates and drops scratch databases on the liv
 2. `scripts/backup_db.sh`, then `scripts/dbsafety.py restore-check backups/db-<ts> --confirm`.
 3. Apply to the test databases first (`scripts/test.sh` migrates `store_*_test`), run the full suite.
 4. Apply to a scratch copy restored from step 2 and run read-only checks against it.
-5. Apply to the dev databases: `cd backend && .venv/bin/python -m app.migrate` (each migration runs in its own transaction per
-   store; a failing migration leaves that store unchanged). Once the hardened runner in `docs/migration-runner-safety.md`
-   exists, this step becomes `--plan --backup backups/db-<ts>` followed by the approved real run (checksums, advisory lock,
-   enforced precheck, lockstep across both stores).
-6. `precheck` again: both stores must be at the same version.
+5. Apply to the dev databases with the hardened runner (`backend/app/migrate.py`, Phase G):
+   * once only, for databases migrated before checksums existed: `cd backend && .venv/bin/python -m app.migrate --adopt`
+     (records each applied file's checksum only if it is byte-identical to its committed version);
+   * `.venv/bin/python -m app.migrate --plan --backup backups/db-<ts>` — every check, nothing written;
+   * `.venv/bin/python -m app.migrate --apply --backup backups/db-<ts>` — lockstep across both stores, checksums,
+     advisory lock, enforced precheck, per-migration lock/statement timeouts, run log in `.run/migrations/`.
+   `--status` is read-only at any time. The API refuses to start while any migration is pending (clear message).
+6. `--status` / `precheck` again: both stores must be at the same version with matching checksums.
 
 ### If one store migrates and the other fails
 
-`app/migrate.py` processes Store A, then Store B. A failure in Store B leaves Store B at the previous version (its
-transaction rolls back) while Store A is already migrated.
+The runner applies each version to Store A, then Store B, before the next version (lockstep). A failure in Store B
+leaves Store B one version behind (its transaction rolls back) while Store A has that version; the next normal run
+refuses with “stores are at different versions”.
 - Do **not** retry blindly. Read the error; fix the cause (data that violates a new constraint, a lock, permissions).
 - The application must be compatible with both versions for that period: every migration must be **additive and
   backward compatible** (expand/contract): new columns nullable or defaulted, constraints added only after code writes them.
-- Then re-run `app.migrate` (already-applied versions are skipped), or roll Store A back with its down script (below).
+- Then run `python -m app.migrate --repair --backup backups/db-<ts>`, which applies to the lagging store only the versions
+  the other store already has (same checksums; never anything newer), or roll Store A back with its down script (below).
 
 ## Down scripts and rollback
 

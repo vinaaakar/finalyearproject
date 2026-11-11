@@ -38,7 +38,7 @@ echo "==> Validating configuration"
 (cd backend && "$VENV/bin/python" -m app.config)
 
 echo "==> Migrating and seeding store databases (synthetic demo data)"
-(cd backend && "$VENV/bin/python" -m app.migrate && "$VENV/bin/python" -m app.seed)
+(cd backend && "$VENV/bin/python" -m app.migrate --apply && "$VENV/bin/python" -m app.seed)
 
 echo "==> Frontend dependencies (npm workspaces, shared node_modules)"
 (cd frontend && npm install --no-audit --no-fund --loglevel=error)

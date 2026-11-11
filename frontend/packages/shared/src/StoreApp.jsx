@@ -8,7 +8,14 @@ import AccountPage from './pages/AccountPage.jsx';
 import CartPage from './pages/CartPage.jsx';
 import CheckoutPage from './pages/CheckoutPage.jsx';
 import PaymentPage from './pages/PaymentPage.jsx';
+import OrderDetailPage from './pages/OrderDetailPage.jsx';
+import { StaffOrderPage, StaffOrdersPage } from './pages/StaffPages.jsx';
+import { StaffCarePage, StaffCareRequestPage } from './pages/StaffCarePages.jsx';
+import { CareNewPage, CareRequestPage, CareRequestsPage } from './pages/CarePages.jsx';
+import { ContactPage, HelpPage, ReturnsPage, ShippingPage } from './pages/SupportPages.jsx';
 import { ForgotPasswordPage, RegisterPage, ResetPasswordPage } from './pages/AuthPages.jsx';
+import { UI_LANGUAGES, ui } from './uiText.js';
+import { DELIVERY_COUNTRY } from './currency.js';
 
 const StoreContext = createContext(null);
 export const useStore = () => useContext(StoreContext);
@@ -22,6 +29,26 @@ export default function StoreApp({ config }) {
   const [cartCount, setCartCount] = useState(0);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
+  // Interface language (Phase I): remembered per store in this browser; English unless the shopper chooses otherwise.
+  const langKey = `avc:${config.storeId}:ui-language`;
+  const [uiLang, setUiLangState] = useState(() => {
+    try {
+      const v = localStorage.getItem(langKey);
+      return UI_LANGUAGES.some(([c]) => c === v) ? v : 'en';
+    } catch {
+      return 'en';
+    }
+  });
+  const setUiLang = useCallback((v) => {
+    setUiLangState(v);
+    try { localStorage.setItem(langKey, v); } catch { /* not remembered */ }
+  }, [langKey]);
+  const t = useCallback((key, vars) => ui(uiLang, key, vars), [uiLang]);
+  // India-only stores: prices in ₹, delivery to Indian addresses.
+  const deliveryCountry = DELIVERY_COUNTRY;
+  useEffect(() => {
+    document.documentElement.lang = UI_LANGUAGES.find(([c]) => c === uiLang)?.[2] || 'en';
+  }, [uiLang]);
 
   useEffect(() => {
     const sync = () => setSession(api.loadSession());
@@ -41,8 +68,8 @@ export default function StoreApp({ config }) {
 
   useEffect(() => {
     document.title = config.name;
-    api.store().then(setInfo, (e) => setInfoError(e.message));
-  }, [api, config.name]);
+    api.store(uiLang).then(setInfo, (e) => setInfoError(e.message));   // policies in the interface language
+  }, [api, config.name, uiLang]);
 
   const openChat = useCallback((prefill = '') => setChat({ open: true, prefill }), []);
   const closeChat = useCallback(() => setChat({ open: false, prefill: '' }), []);
@@ -55,12 +82,12 @@ export default function StoreApp({ config }) {
   }, []);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  const value = { api, config, info, session, openChat, notify };
+  const value = { api, config, info, infoError, session, openChat, notify, uiLang, setUiLang, t, deliveryCountry };
 
   return (
     <StoreContext.Provider value={value}>
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <a className="skip-link" href="#main">Skip to content</a>
+        <a className="skip-link" href="#main">{t('skip')}</a>
         <header className="site-header">
           <div className="container header-inner">
             <Link to="/" className="brand" aria-label={`${config.name} home`}>
@@ -70,15 +97,17 @@ export default function StoreApp({ config }) {
                 <span className="brand-tagline">{config.tagline}</span>
               </span>
             </Link>
-            <nav className="main-nav" aria-label="Main">
-              <NavLink to="/" end>Shop</NavLink>
-              <NavLink to="/account">{session ? `Hi, ${session.customer.name.split(' ')[0]}` : 'Sign in'}</NavLink>
+            <nav className="main-nav" aria-label={t('mainNav')}>
+              <NavLink to="/" end>{t('shop')}</NavLink>
+              <NavLink to="/account">{session ? t('hi', { name: session.customer.name.split(' ')[0] }) : t('signIn')}</NavLink>
+              {session?.customer.role === 'agent' && <NavLink to="/staff/orders">{t('fulfilment')}</NavLink>}
+              {session?.customer.role === 'agent' && <NavLink to="/staff/care">{t('customerCare')}</NavLink>}
               {session?.customer.role !== 'agent' && (
-                <NavLink to="/cart" className="nav-cart" aria-label={`Cart, ${cartCount} item${cartCount === 1 ? '' : 's'}`}>
-                  Cart<span className={`cart-count ${cartCount > 0 ? '' : 'cart-count-empty'}`} aria-hidden="true">{cartCount}</span>
+                <NavLink to="/cart" className="nav-cart" aria-label={t('cartLabel', { n: cartCount, s: cartCount === 1 ? '' : 's' })}>
+                  {t('cart')}<span className={`cart-count ${cartCount > 0 ? '' : 'cart-count-empty'}`} aria-hidden="true">{cartCount}</span>
                 </NavLink>
               )}
-              <button type="button" className="btn btn-ghost" onClick={() => openChat()}>Help</button>
+              <button type="button" className="btn btn-ghost" onClick={() => openChat()}>{t('help')}</button>
             </nav>
           </div>
         </header>
@@ -95,6 +124,18 @@ export default function StoreApp({ config }) {
             <Route path="/cart" element={<CartPage />} />
             <Route path="/checkout" element={<CheckoutPage />} />
             <Route path="/orders/:number/pay" element={<PaymentPage />} />
+            <Route path="/orders/:number" element={<OrderDetailPage />} />
+            <Route path="/staff/orders" element={<StaffOrdersPage />} />
+            <Route path="/staff/orders/:number" element={<StaffOrderPage />} />
+            <Route path="/staff/care" element={<StaffCarePage />} />
+            <Route path="/staff/care/:ref" element={<StaffCareRequestPage />} />
+            <Route path="/support/requests" element={<CareRequestsPage />} />
+            <Route path="/support/requests/:ref" element={<CareRequestPage />} />
+            <Route path="/support/new" element={<CareNewPage />} />
+            <Route path="/help" element={<HelpPage />} />
+            <Route path="/shipping" element={<ShippingPage />} />
+            <Route path="/returns" element={<ReturnsPage />} />
+            <Route path="/contact" element={<ContactPage />} />
             <Route path="*" element={<div className="empty"><h1>Page not found</h1><Link to="/">Back to the shop</Link></div>} />
           </Routes>
         </main>
@@ -111,7 +152,19 @@ export default function StoreApp({ config }) {
                 <p>{info.policies[t].summary}</p>
               </div>
             ))}
-            <p className="footer-note">Demo store with synthetic data. Payments run in sandbox test mode: no real money moves and no card details are collected.</p>
+            <nav className="footer-nav" aria-label={t('customerService')}>
+              <Link to="/help">{t('help')}</Link>
+              <Link to="/shipping">{t('shipping')}</Link>
+              <Link to="/returns">{t('returns')}</Link>
+              <Link to="/contact">{t('contact')}</Link>
+            </nav>
+            <label className="footer-lang">
+              {t('language')}{' '}
+              <select value={uiLang} onChange={(e) => setUiLang(e.target.value)} data-testid="ui-language">
+                {UI_LANGUAGES.map(([code, name, bcp]) => <option key={code} value={code} lang={bcp}>{name}</option>)}
+              </select>
+            </label>
+            <p className="footer-note">{t('demoNote')}</p>
           </div>
         </footer>
 

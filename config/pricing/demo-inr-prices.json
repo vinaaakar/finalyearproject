@@ -1,0 +1,28 @@
+{
+  "_about": "ACADEMIC DEMONSTRATION PRICES for the AI Voice Commerce final-year project. Fixed rupee amounts chosen for the demo; NOT commercial prices, NOT converted from the USD catalogue (no exchange rate is used anywhere). Amounts are in paise (₹1 = 100 paise). Applied with scripts/apply_demo_inr_prices.py.",
+  "approved_by": "academic demonstration price list (not commercial)",
+  "store-a": {
+    "ridgeline-2p-tent": 899900,
+    "basecamp-4p-tent": 1449900,
+    "alpine-20f-sleeping-bag": 429900,
+    "featherlite-sleeping-pad": 279900,
+    "trailhead-55l-backpack": 649900,
+    "daytrip-22l-daypack": 189900,
+    "granite-hiking-boots": 599900,
+    "stormshell-rain-jacket": 399900,
+    "pocketflame-stove": 129900,
+    "lumen-300-headlamp": 89900
+  },
+  "store-b": {
+    "ethiopia-yirgacheffe-beans": 84900,
+    "house-blend-beans": 54900,
+    "sencha-green-tea": 44900,
+    "spiced-chai-blend": 34900,
+    "precision-burr-grinder": 749900,
+    "gooseneck-kettle": 329900,
+    "classic-french-press": 129900,
+    "ceramic-pour-over-dripper": 89900,
+    "stoneware-mug-set": 159900,
+    "wildflower-honey": 39900
+  }
+}

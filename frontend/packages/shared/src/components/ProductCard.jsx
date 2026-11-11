@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../StoreApp.jsx';
 import ProductImage from './ProductImage.jsx';
+import { productPrice } from '../currency.js';
 
 export function StockBadge({ product }) {
   if (!product.in_stock) return <span className="badge badge-out">Out of stock</span>;
@@ -39,6 +40,11 @@ function QuickAdd({ product }) {
   );
 }
 
+export function Price({ product, className = 'price' }) {
+  const p = productPrice(product);
+  return <span className={p.available ? className : `${className} price-unset`}>{p.text}</span>;
+}
+
 export default function ProductCard({ product, compact = false }) {
   const { session } = useStore();
   if (compact) {
@@ -48,7 +54,7 @@ export default function ProductCard({ product, compact = false }) {
         <ProductImage product={product} size="thumb" />
         <span className="product-body">
           <span className="product-name">{product.name}</span>
-          <span className="product-meta"><span className="price">{product.price}</span><StockBadge product={product} /></span>
+          <span className="product-meta"><Price product={product} /><StockBadge product={product} /></span>
         </span>
       </Link>
     );
@@ -62,7 +68,7 @@ export default function ProductCard({ product, compact = false }) {
         <h3 className="product-name"><Link to={`/products/${product.slug}`} className="card-link">{product.name}</Link></h3>
         <p className="product-desc">{product.description}</p>
         <div className="product-meta">
-          <span className="price">{product.price}</span>
+          <Price product={product} />
           <StockBadge product={product} />
         </div>
         {session?.customer.role !== 'agent' && <QuickAdd product={product} />}

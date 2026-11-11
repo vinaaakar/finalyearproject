@@ -25,10 +25,15 @@ from ..commerce import MAX_LINE_QTY, CartOwner
 from ..security import Principal
 from ..stores import SHIPPING_EXCLUDED_REGIONS, STORE_BRANDING, StoreId
 from . import care_text, i18n
-from .intent import Intent, normalise_order_number, sensitive_kind
+from .intent import PRODUCT_LEXICON, SEARCH_SYNONYMS, Intent, normalise_order_number, sensitive_kind
+
+# A weight written in a catalogue description ("1.9 kg", "410 g"); nothing else counts as a stated weight.
+_WEIGHT_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?\s?(?:kg|g)(?![a-z])", re.I)
+# Kind words the search adds for everyday words ("backpack" → "pack"): they say what kind, not which product.
+SEARCH_SYNONYM_TARGETS = {t for terms in SEARCH_SYNONYMS.values() for t in terms} | {t for v in PRODUCT_LEXICON.values() for t in v.split()}
 
 ORDER_CARE = {"order_late", "delivered_missing", "wrong_item", "missing_item", "damaged", "defective", "cancel",
-              "modify_order", "payment_issue", "refund_status", "return_request", "exchange", "reorder", "invoice"}
+              "modify_order", "payment_issue", "refund_status", "return_request", "exchange", "reorder", "invoice", "order_amount"}
 _HUMAN_RE = re.compile(r"human|agent|representative|real person|speak to (someone|a person)|talk to (someone|a person)|"
                        r"மனிதர்|ஏஜென்ட்|பிரதிநிதி|एजेंट|इंसान|प्रतिनिधि|किसी व्यक्ति", re.I)
 _DUPLICATE_RE = re.compile(r"twice|double|duplicate|two times|charged again|இரண்டு முறை|दो बार|दोबारा कट", re.I)
@@ -53,8 +58,16 @@ def _iso(d: Any) -> str | None:
 
 
 class CareDesk:
-    def __init__(self, payments=None):
+    def __init__(self, payments=None, view=None):
+        from .catalog_view import CatalogView
         self.payments = payments
+        self.view = view or CatalogView()     # products priced like the storefront (selling currency, approved list)
+
+    def price(self, p: dict[str, Any], lang: str) -> str:
+        """A product's price as the storefront shows it, or "price not set" — never another currency's amount."""
+        if p.get("price_cents") is None:
+            return i18n.t(lang, "price_not_set")
+        return commerce.money(p["price_cents"], p.get("currency", "USD"))
 
     # ---- references from the conversation (re-validated against the database) ----------------------
     @staticmethod
@@ -68,13 +81,12 @@ class CareDesk:
                 return numbers.pop()
         return None
 
-    @staticmethod
-    def history_products(store: StoreId, history: list[dict[str, str]]) -> list[dict[str, Any]]:
+    def history_products(self, store: StoreId, history: list[dict[str, str]]) -> list[dict[str, Any]]:
         """Catalogue products named in recent turns, most recent turn first (in mention order within a turn)."""
         found: list[dict[str, Any]] = []
         for turn in reversed((history or [])[-6:]):
             # Matched in the database against this store's products only (no catalogue-size cap).
-            for p in repo.products_mentioned_in(store, turn["content"]):
+            for p in self.view.mentioned_in(store, turn["content"]):
                 if p["slug"] not in {f["slug"] for f in found}:
                     found.append(p)
             if found:
@@ -120,7 +132,7 @@ class CareDesk:
                     out.actions.append(email_action)  # the reply sends the customer to the team: give them the button
 
         # ---- products: compare, cheaper, alternatives, add to cart, care tips ---------------------------
-        if intents & {"compare", "cheaper", "alternative", "add_to_cart", "care"}:
+        if intents & {"compare", "cheaper", "alternative", "add_to_cart", "remove_from_cart", "attribute", "care"}:
             self._product_care(store, intent, ctx, principal, owner, lang, history, out, email)
 
         # ---- accounts, checkout, store information -----------------------------------------------------
@@ -130,13 +142,18 @@ class CareDesk:
             self._checkout(store, intent, ctx, principal, owner, lang, out, store_name)
         if "promotions" in intents:
             out.body.append(i18n.t(lang, "promo_none", store=store_name))
-            rates = repo.get_shipping_rates(store)
-            if rates["free_shipping_min_cents"] is not None:
-                out.body.append(i18n.t(lang, "promo_free_ship", threshold=commerce.money(rates["free_shipping_min_cents"])).strip())
+            threshold = self.view.free_shipping_threshold(store)
+            if threshold is not None:
+                out.body.append(i18n.t(lang, "promo_free_ship", threshold=threshold).strip())
             out.skip |= {"products"}
         for key in ("privacy", "languages", "accessibility"):
             if key in intents:
                 out.body.append(i18n.t(lang, key, store=store_name, email=email))
+        if "business_info" in intents:
+            out.skip.add("contact")
+            out.body.append(i18n.t(lang, "business_info", store=store_name, email=email, hours=hours))
+            if email_action not in out.actions:
+                out.actions.append(email_action)
         if "bulk" in intents:
             out.body.append(i18n.t(lang, "bulk", email=email, hours=hours))
             out.actions.append(email_action)
@@ -198,7 +215,7 @@ class CareDesk:
             pending = [o for o in orders if o["status"] == "pending_payment"]
             cand = target or (pending[0] if len(pending) == 1 else None)
             if cand is None and len(pending) > 1:
-                out.body.append(i18n.t(lang, "cancel_which", list=", ".join(f"{o['order_number']} ({commerce.money(o['total_cents'])})" for o in pending)))
+                out.body.append(i18n.t(lang, "cancel_which", list=", ".join(f"{o['order_number']} ({commerce.money(o['total_cents'], (o.get('currency') or 'USD').strip())})" for o in pending)))
                 for o in pending:
                     show(o)
             elif cand is None:
@@ -225,6 +242,23 @@ class CareDesk:
                 show(cand)
                 key = {"pending_payment": "modify_unpaid", "processing": "modify_paid"}.get(cand["status"], "modify_shipped")
                 out.body.append(i18n.t(lang, key, number=cand["order_number"], status=status(cand), email=email).strip())
+
+        if "order_amount" in intents:
+            # The recorded amounts of the customer's own order (the latest unless one was named). Nothing is estimated.
+            o = target or orders[0]
+            show(o)
+            line = i18n.t(lang, "order_amount", number=o["order_number"],
+                          total=commerce.money(o["total_cents"], (o.get("currency") or "USD").strip()))
+            p = self._latest_payment(store, principal, o)
+            if p and p["status"] == "succeeded":
+                line += i18n.t(lang, "order_amount_paid", amount=p["amount"])
+            elif o["status"] == "pending_payment":
+                line += i18n.t(lang, "order_amount_unpaid")
+            else:
+                line += i18n.t(lang, "order_amount_no_record")
+            out.body.append(line)
+            if self._sandbox():
+                out.body.append(i18n.t(lang, "pay_sandbox").strip())
 
         if "payment_issue" in intents:
             if _DUPLICATE_RE.search(intent.raw):
@@ -336,10 +370,12 @@ class CareDesk:
             o = target or orders[0]
             show(o)
             if o.get("subtotal_cents") is not None and o.get("shipping_cents") is not None:
-                out.body.append(i18n.t(lang, "invoice_breakdown", number=o["order_number"], subtotal=commerce.money(o["subtotal_cents"]),
-                                       shipping=commerce.money(o["shipping_cents"]), total=commerce.money(o["total_cents"])).strip())
+                cur = (o.get("currency") or "USD").strip()     # the order's own currency (historical orders: USD)
+                out.body.append(i18n.t(lang, "invoice_breakdown", number=o["order_number"], subtotal=commerce.money(o["subtotal_cents"], cur),
+                                       shipping=commerce.money(o["shipping_cents"], cur), total=commerce.money(o["total_cents"], cur)).strip())
             else:
-                out.body.append(i18n.t(lang, "invoice_order", number=o["order_number"], total=commerce.money(o["total_cents"])).strip())
+                out.body.append(i18n.t(lang, "invoice_order", number=o["order_number"],
+                                       total=commerce.money(o["total_cents"], (o.get("currency") or "USD").strip())).strip())
             out.actions.append({"type": "link", "to": "/account", "label": i18n.t(lang, "btn_orders")})
 
         if not out.body:
@@ -386,12 +422,12 @@ class CareDesk:
                       owner: CartOwner | None, lang: str, history: list[dict[str, str]], out: CareOutcome, email: str) -> None:
         from .service import public_product  # local import: service imports this module
         intents = intent.intents
-        found = repo.search_products_by_terms(store, intent.search_terms, limit=5) if intent.search_terms else []
+        found = self.view.search(store, intent.search_terms, limit=5) if intent.search_terms else []
         top = [p for p in found if p["score"] == found[0]["score"]] if found else []
         hist = self.history_products(store, history)
         # Same-category lookups go to the database per category (not a capped copy of the whole catalogue).
         def in_category(cat: str) -> list[dict[str, Any]]:
-            return repo.list_products(store, category=cat, limit=500)
+            return self.view.in_category(store, cat)
 
         def stock(p):
             if p["stock_qty"] <= 0:
@@ -407,15 +443,63 @@ class CareDesk:
                 lines = []
                 for p in picks:
                     desc = f": {p['description'].rstrip('.')}" if lang == "en" else ""
-                    lines.append(f"{p['name']} — {commerce.money(p['price_cents'])}, {stock(p)}{desc}")
+                    lines.append(f"{p['name']} — {self.price(p, lang)}, {stock(p)}{desc}")
                 text = i18n.t(lang, "compare_intro") + "; ".join(lines) + i18n.end(lang)
-                a, b = sorted(picks[:2], key=lambda p: p["price_cents"])
-                if a["price_cents"] < b["price_cents"]:
-                    text += i18n.t(lang, "compare_cheaper", name=a["name"], diff=commerce.money(b["price_cents"] - a["price_cents"]))
+                if all(p["price_cents"] is not None for p in picks[:2]):     # a difference only between two real prices
+                    a, b = sorted(picks[:2], key=lambda p: p["price_cents"])
+                    if a["price_cents"] < b["price_cents"]:
+                        text += i18n.t(lang, "compare_cheaper", name=a["name"],
+                                       diff=commerce.money(b["price_cents"] - a["price_cents"], a.get("currency", "USD")))
                 out.body.append(text)
                 out.products = [public_product(p) for p in picks]
 
-        if intents & {"cheaper", "alternative"} and "compare" not in intents:
+        cheapest_done = False
+        # A real match names the kind in a product's name or category ("bag" only in a coffee's "340 g bag" is not one).
+        if intent.cheapest and intent.search_terms and "compare" not in intents and not (found and any(
+                t.lower() in f"{found[0]['name']} {found[0]['category']}".lower() for t in intent.search_terms)):
+            cheapest_done = True
+            out.skip.add("products")
+            cats = ", ".join(i18n.category(lang, c) for c in repo.list_categories(store))
+            out.body.append(i18n.t(lang, "not_found", store=ctx["store"]["name"], within="")
+                            + (i18n.t(lang, "we_carry", cats=cats) if cats else ""))
+            out.products = []
+        elif intent.cheapest and found and "compare" not in intents:
+            # "The cheapest sleeping bag": the lowest-priced in-stock product of the kind asked for. The kind is the best
+            # match's category, narrowed to items whose name/description also has every search word the best match has
+            # (so a sleeping bag is never answered with the sleeping pad in the same category).
+            cheapest_done = True
+            out.skip.add("products")
+            ref = found[0]
+
+            def words(p):
+                return f"{p['name']} {p.get('description') or ''}".lower()
+            must = [t for t in intent.search_terms if t.lower() in words(ref)]
+            limit = intent.max_price_cents
+            if intent.budget_currency and intent.budget_currency != self.view.currency(store):
+                limit = None                 # never compare a budget in another currency (no exchange rate)
+            kind = [p for p in in_category(ref["category"]) if p["price_cents"] is not None and all(t.lower() in words(p) for t in must)]
+            available = sorted((p for p in kind if p["stock_qty"] > 0 and (limit is None or p["price_cents"] <= limit)),
+                               key=lambda p: (p["price_cents"], p["name"]))
+            if available:
+                best = available[0]
+                text = i18n.t(lang, "cheapest_found", name=best["name"], price=self.price(best, lang))
+                if len(available) > 1:
+                    text += i18n.t(lang, "cheapest_next", list="; ".join(f"{p['name']} — {self.price(p, lang)}" for p in available[1:3]))
+                sold_out = [p for p in kind if p["stock_qty"] <= 0 and p["price_cents"] < best["price_cents"]]
+                if sold_out:
+                    text += i18n.t(lang, "cheapest_sold_out", name=sold_out[0]["name"], price=self.price(sold_out[0], lang))
+                out.body.append(text)
+                out.products = [public_product(p) for p in available[:3]]
+            elif limit is not None and any(p["stock_qty"] > 0 for p in kind):
+                over = min((p for p in kind if p["stock_qty"] > 0), key=lambda p: p["price_cents"])
+                out.body.append(i18n.t(lang, "cheapest_over_budget", budget=commerce.money(limit, self.view.currency(store)),
+                                       name=over["name"], price=self.price(over, lang)))
+                out.products = [public_product(over)]
+            else:
+                out.body.append(i18n.t(lang, "cheapest_none", name=ref["name"]))
+                out.products = [public_product(ref)]
+
+        if intents & {"cheaper", "alternative"} and "compare" not in intents and not cheapest_done:
             out.skip.add("products")
             ref = top[0] if len(top) == 1 else (hist[0] if hist else None)
             if ref is None and found:
@@ -425,22 +509,26 @@ class CareDesk:
                 out.products = []
             else:
                 same = [p for p in in_category(ref["category"]) if p["slug"] != ref["slug"] and p["stock_qty"] > 0]
-                if "cheaper" in intents:
-                    # Same kind of product only: a cheaper backpack is not a cheaper tent.
-                    cheaper = sorted((p for p in same if p["price_cents"] < ref["price_cents"]), key=lambda p: -p["price_cents"])
+                if "cheaper" in intents and ref["price_cents"] is None:
+                    out.body.append(i18n.t(lang, "alternatives", list=f"{ref['name']} ({self.price(ref, lang)})").strip())
+                    out.products = [public_product(ref)]
+                elif "cheaper" in intents:
+                    # Same kind of product only: a cheaper backpack is not a cheaper tent. Unpriced items can't be compared.
+                    cheaper = sorted((p for p in same if p["price_cents"] is not None and p["price_cents"] < ref["price_cents"]),
+                                     key=lambda p: -p["price_cents"])
                     if cheaper:
-                        out.body.append(i18n.t(lang, "cheaper_found", name=ref["name"], price=commerce.money(ref["price_cents"]))
-                                        + "; ".join(f"{p['name']} — {commerce.money(p['price_cents'])}, {stock(p)}" for p in cheaper[:3])
+                        out.body.append(i18n.t(lang, "cheaper_found", name=ref["name"], price=self.price(ref, lang))
+                                        + "; ".join(f"{p['name']} — {self.price(p, lang)}, {stock(p)}" for p in cheaper[:3])
                                         + i18n.end(lang))
                         out.products = [public_product(p) for p in cheaper[:3]]
                     else:
-                        out.body.append(i18n.t(lang, "cheaper_none", name=ref["name"], price=commerce.money(ref["price_cents"]),
+                        out.body.append(i18n.t(lang, "cheaper_none", name=ref["name"], price=self.price(ref, lang),
                                                category=i18n.category(lang, ref["category"])))
                         out.products = [public_product(ref)]
                 else:
                     if same:
                         out.body.append(i18n.t(lang, "alternatives", list=", ".join(
-                            f"{p['name']} ({commerce.money(p['price_cents'])})" for p in same[:3])).strip())
+                            f"{p['name']} ({self.price(p, lang)})" for p in same[:3])).strip())
                         out.products = [public_product(p) for p in same[:3]]
                     else:
                         out.body.append(i18n.t(lang, "alt_none").strip())
@@ -453,7 +541,7 @@ class CareDesk:
                 product = top[0] if len(top) == 1 else (None if top else (hist[0] if hist else None))
                 if product is None and len(top) > 1:
                     out.body.append(i18n.t(lang, "add_which", list=", ".join(
-                        f"{p['name']} ({commerce.money(p['price_cents'])})" for p in top[:3])))
+                        f"{p['name']} ({self.price(p, lang)})" for p in top[:3])))
                     out.products = [public_product(p) for p in top[:3]]
                 elif product is None:
                     out.body.append(i18n.t(lang, "add_unknown"))
@@ -462,7 +550,7 @@ class CareDesk:
                     out.body.append(i18n.t(lang, "add_out", name=product["name"]))
                     alts = [p for p in in_category(product["category"]) if p["stock_qty"] > 0]
                     out.body.append(i18n.t(lang, "alternatives", list=", ".join(
-                        f"{p['name']} ({commerce.money(p['price_cents'])})" for p in alts[:3])).strip() if alts
+                        f"{p['name']} ({self.price(p, lang)})" for p in alts[:3])).strip() if alts
                         else i18n.t(lang, "alt_none").strip())
                     out.products = [public_product(p) for p in [product, *alts[:2]]]
                 else:
@@ -476,10 +564,58 @@ class CareDesk:
                         out.body.append(i18n.t(lang, "add_limit", name=product["name"], max=max(room, 0), stock=product["stock_qty"]))
                     if qty >= 1:
                         label = i18n.t(lang, "btn_add", qty=qty, name=product["name"])
-                        out.body.append(i18n.t(lang, "add_confirm", name=product["name"], price=commerce.money(product["price_cents"]), button=label))
+                        out.body.append(i18n.t(lang, "add_confirm", name=product["name"], price=self.price(product, lang), button=label))
                         out.actions.append({"type": "add_to_cart", "slug": product["slug"], "name": product["name"],
                                             "quantity": qty, "label": label})
                     out.products = [public_product(product)]
+
+        if "attribute" in intents:
+            # Colours, sizes, flavours… are only known if the catalogue description says so: quote it, never invent.
+            from .intent import attribute_asked
+            out.skip.add("products")
+            kind = attribute_asked(intent.raw) or "colour"
+            targets = (top[:1] if len(top) == 1 else top[:2]) or hist[:2]
+            # "How much does this bag weigh?" / "What is its weight?" is about the product being discussed, unless the
+            # message names another one by a word of its own name ("the Ridgeline tent"), not just a kind word ("bag").
+            generic = set(SEARCH_SYNONYM_TARGETS) | {"bag", "bags", "product", "item"}
+            if intent.refers_back and hist and not (top and any(
+                    t not in generic and t in top[0]["name"].lower() for t in intent.search_terms)):
+                targets = hist[:1]
+            name_of = care_text.ATTRIBUTE_NAMES[kind][lang]
+            if not targets:
+                out.body.append(i18n.t(lang, "attr_which", attr=name_of))
+                out.products = []          # asking which product: no unrelated suggestions
+            else:
+                for p in targets:
+                    weight = _WEIGHT_RE.search(p["description"]) if kind == "weight" else None
+                    if weight:      # the catalogue states it: answer directly with the catalogue's own figure
+                        out.body.append(i18n.t(lang, "attr_weight", name=p["name"], weight=weight.group(0)))
+                    elif kind == "weight":
+                        out.body.append(i18n.t(lang, "attr_weight_missing", name=p["name"]))
+                    else:
+                        out.body.append(i18n.t(lang, "attr_catalogue", name=p["name"], desc=p["description"].rstrip("."), attr=name_of))
+                out.products = [public_product(p) for p in targets]
+
+        if "remove_from_cart" in intents:
+            out.skip |= {"products", "cart"}      # the removal reply already names the cart contents
+            items = commerce.get_cart(store, owner)["items"] if owner is not None and (owner.customer_id or owner.guest_hash) else []
+            if principal is not None and principal.role == "agent":
+                out.body.append(i18n.t(lang, "add_staff"))
+            elif not items:
+                out.body.append(i18n.t(lang, "remove_empty"))
+            else:
+                in_cart = {i["slug"]: i for i in items}
+                named = [p for p in top if p["slug"] in in_cart] if top else []
+                discussed = [p for p in hist if p["slug"] in in_cart]
+                pick = (named[:1] if len(named) == 1 else None) or (discussed[:1] if len(discussed) == 1 and not named else None) \
+                    or ([{"slug": items[0]["slug"], "name": items[0]["name"]}] if len(items) == 1 else None)
+                if not pick:
+                    out.body.append(i18n.t(lang, "remove_which", list=", ".join(i["name"] for i in items[:5])))
+                else:
+                    item = in_cart[pick[0]["slug"]]
+                    label = i18n.t(lang, "btn_remove", name=item["name"])
+                    out.body.append(i18n.t(lang, "remove_confirm", name=item["name"], qty=item["quantity"], button=label))
+                    out.actions.append({"type": "remove_from_cart", "slug": item["slug"], "name": item["name"], "label": label})
 
         if "care" in intents:
             out.skip.add("products")
@@ -514,23 +650,23 @@ class CareDesk:
         if principal is not None:
             out.body.append(i18n.t(lang, "acct_history"))
 
-    @staticmethod
-    def _checkout(store: StoreId, intent: Intent, ctx: dict[str, Any], principal: Principal | None, owner: CartOwner | None,
+    def _checkout(self, store: StoreId, intent: Intent, ctx: dict[str, Any], principal: Principal | None, owner: CartOwner | None,
                   lang: str, out: CareOutcome, store_name: str) -> None:
         raw = intent.raw
+        india = self.view.market(store) == "IN"
         asks_errors = re.search(r"error|zip|total|address|invalid|changed|wrong|message|பிழை|एरर|ग़लत|गलत", raw)
         asks_region = re.search(r"alaska|hawaii|ship to|deliver to|state|அனுப்ப|डिलीवरी", raw)
         asks_how = re.search(r"how|steps|guest|without an account|place|எப்படி|कैसे|गेस्ट", raw) or not (asks_errors or asks_region)
         if asks_how:
-            out.body.append(i18n.t(lang, "checkout_steps"))
+            out.body.append(i18n.t(lang, "checkout_steps_in" if india else "checkout_steps"))
         if principal is None and asks_how or re.search(r"guest|without an account|விருந்தினர்|गेस्ट|बिना अकाउंट", raw):
             out.body.append(i18n.t(lang, "checkout_guest").strip())
-        excluded = sorted(SHIPPING_EXCLUDED_REGIONS[store])
+        excluded = [] if india else sorted(SHIPPING_EXCLUDED_REGIONS[store])   # US-only state exclusions
         if excluded and (asks_region or asks_how):
             out.body.append(i18n.t(lang, "checkout_regions", store=store_name,
                                    regions=" & ".join(_REGION_NAMES.get(r, r) for r in excluded)).strip())
         if asks_errors:
-            out.body.append(i18n.t(lang, "checkout_errors").strip())
+            out.body.append(i18n.t(lang, "checkout_errors_in" if india else "checkout_errors").strip())
         if re.search(r"limit|how many|maximum|quantity|எத்தனை|कितने", raw):
             out.body.append(i18n.t(lang, "cart_limit").strip())
         if owner is not None and (owner.customer_id or owner.guest_hash):

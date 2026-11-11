@@ -198,7 +198,7 @@ class CallManager:
             if not number:
                 return OutboundTurn(s.call_id, f"Sorry, I didn't catch that. Please say or key in your order number. It starts with {ORDER_PREFIX[s.store]}")
             s.pending_order_number, s.state = number, "await_postal"
-            return OutboundTurn(s.call_id, "Thanks. To verify it's you, please say or key in the five-digit shipping ZIP code for that order.")
+            return OutboundTurn(s.call_id, "Thanks. " + self._postal_prompt(s.store))
 
         if s.state == "await_postal":
             number = s.pending_order_number or ""
@@ -213,7 +213,8 @@ class CallManager:
                 if s.verify_failures >= MAX_VERIFY_FAILURES:
                     return self._end(s, "I'm sorry, I wasn't able to verify that order. Please contact our support team by email for help. Goodbye.")
                 s.state = "await_order_number"
-                return OutboundTurn(s.call_id, "That order number and ZIP code don't match our records. Let's try again. Please say or key in your order number.")
+                return OutboundTurn(s.call_id, f"That order number and {self._postal_name(s.store)} don't match our records. "
+                                                "Let's try again. Please say or key in your order number.")
             self.guard.record_success(s.store, s.client, number)
             s.state, s.pending_order_number = "main", None
             o = public_order(order)
@@ -232,12 +233,28 @@ class CallManager:
         if "order_status" in intent.intents:
             if intent.order_number:
                 s.pending_order_number, s.state = intent.order_number, "await_postal"
-                return OutboundTurn(s.call_id, "Sure. To verify it's you, please say or key in the five-digit shipping ZIP code for that order.")
+                return OutboundTurn(s.call_id, "Sure. " + self._postal_prompt(s.store))
             s.state = "await_order_number"
             return OutboundTurn(s.call_id, f"Sure. Please say or key in your order number. It starts with {ORDER_PREFIX[s.store]}")
         # The phone simulator is English-only for now.
         result = self.assistant.answer(s.store, text, principal=None, conversation_language="en")
         return OutboundTurn(s.call_id, result.reply)
+
+    # The wording follows the store's market, never the order (looking the order up before verification would reveal
+    # whether it exists). India stores ask for the six-digit PIN code; orders placed before the India launch were US
+    # orders, so their ZIP code is still accepted and named. A US-market store keeps the original ZIP wording.
+    def _india(self, store: StoreId) -> bool:
+        view = getattr(self.assistant, "view", None)
+        return bool(view is not None and view.market(store) == "IN")
+
+    def _postal_name(self, store: StoreId) -> str:
+        return "PIN code" if self._india(store) else "ZIP code"
+
+    def _postal_prompt(self, store: StoreId) -> str:
+        if self._india(store):
+            return ("To verify it's you, please say or key in the six-digit shipping PIN code for that order. "
+                    "For an older order with a US address, use its five-digit ZIP code.")
+        return "To verify it's you, please say or key in the five-digit shipping ZIP code for that order."
 
     def _end(self, s: CallSession, say: str) -> OutboundTurn:
         s.state = "ended"

@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import db
 from . import repositories as repo
 from .assistant import truth
+from . import migrate, worker
 from .commerce import CommerceError
 from .assistant.llm import OllamaClient
 from .assistant.service import Assistant
@@ -25,7 +26,7 @@ from .logging_config import configure_logging
 from .notify import EmailSender, build_sender
 from .payments.base import get_provider
 from .phone.session import CallManager
-from .routers import account, cart, catalog, chat, checkout, voice_phone
+from .routers import account, care, cart, catalog, chat, checkout, voice_phone, staff
 from .speech.adapters import build_stt, build_tts
 from .stores import StoreId
 
@@ -73,6 +74,22 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         db.init_pools(settings.store_database_urls)
+        # Schema guard (Phase G): this code needs every migration in backend/migrations. Starting against an older
+        # schema would fail on the first order query, so refuse to start with a clear instruction instead.
+        behind = {}
+        for store in StoreId:
+            try:
+                missing = migrate.pending_versions(settings.store_database_urls[store.value])
+            except Exception:  # database not reachable: /api/health reports that; don't block start-up here
+                continue
+            if missing:
+                behind[store.value] = missing
+        # India market: prices come only from approved INR price lists (product_prices) — never converted. Products
+        # without one are shown as "price not set" and can't be ordered; /api/health reports how complete the list is.
+        if behind:
+            db.close_pools()
+            raise RuntimeError(f"database schema is behind this code: {behind}. Back up (scripts/backup_db.sh), then run "
+                               "`python -m app.migrate --plan --backup backups/db-<ts>` and `--apply` (docs/database-safety.md).")
         log.info("API started (llm=%s)", f"ollama:{settings.ollama_model}" if llm else "disabled")
         # Stored policy text that promises services this system doesn't provide. The assistant never repeats these
         # claims (assistant/truth.py), but the text itself needs a reviewed data correction, so make it visible.
@@ -96,13 +113,13 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
     app.state.policy_warnings = {}
     app.state.llm = llm
     app.state.payments = get_provider(settings.payment_provider)
-    app.state.assistant = Assistant(llm, payments=app.state.payments)
+    app.state.assistant = Assistant(llm, payments=app.state.payments, settings=settings)
     app.state.calls = CallManager(app.state.assistant)
     app.state.stt = build_stt(settings.speech_stt, settings.whisper_cpp_bin, settings.whisper_model_path,
                               en_model_path=settings.whisper_en_model_path, languages=settings.speech_languages,
                               default_language=settings.speech_default_language, detect=settings.speech_language_detection)
     app.state.tts = build_tts(settings.speech_tts, settings.tts_voice, {"ta": settings.tts_voice_ta, "hi": settings.tts_voice_hi})
-    app.state.mailer = mailer or build_sender(settings.email_delivery)
+    app.state.mailer = mailer or build_sender(settings.email_delivery, settings)
 
     app.add_middleware(
         CORSMiddleware,
@@ -147,6 +164,18 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
         log.exception("Unhandled error: %s", type(exc).__name__)
         return _error(500, "internal_error", "Something went wrong on our side. Please try again.")
 
+    @app.get("/api/health/live", tags=["health"])
+    def live():
+        """Liveness: the process is serving requests (restart the container if this fails)."""
+        return {"status": "ok"}
+
+    @app.get("/api/health/ready", tags=["health"])
+    def ready():
+        """Readiness: both store databases answer. 503 takes the instance out of the load balancer."""
+        dbs = {s.value: db.check_store_db(s) for s in StoreId}
+        ok = all(dbs.values())
+        return JSONResponse(status_code=200 if ok else 503, content={"status": "ready" if ok else "not_ready", "databases": dbs})
+
     @app.get("/api/health", tags=["health"])
     def health():
         dbs = {s.value: db.check_store_db(s) for s in StoreId}
@@ -157,9 +186,31 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
             "payments": {"provider": app.state.payments.name, "sandbox": app.state.payments.sandbox},
             # Topics whose stored policy text claims services that don't exist (suppressed in answers; text needs correcting).
             "policy_warnings": {k: sorted({w.split(":")[0] for w in v}) for k, v in app.state.policy_warnings.items() if v},
+            "selling": {s.value: _selling_health(s) for s in StoreId if dbs[s.value]},
             "llm": {"enabled": llm is not None, "available": llm_ok, "model": settings.ollama_model if llm else None,
                     "mode": "ollama" if llm_ok else "rule-based fallback"},
+            # Background worker signals (python -m app.worker): queued / dead side effects and last job runs.
+            "background": {s.value: _worker_health(s) for s in StoreId if dbs[s.value]},
         }
+
+    def _selling_health(store: StoreId) -> dict:
+        from .pricing import price_list_status, selling_currency
+        from .shipping_zones import configured
+        try:
+            cur = selling_currency(settings.store_markets, store)
+            status = price_list_status(store)
+            info = status["currencies"].get(cur) or {"approved": status["products"], "complete": True}
+            market = settings.store_markets.get(store.value, "US")
+            return {"market": market, "currency": cur, "products": status["products"], "priced": info["approved"],
+                    "prices_complete": info["complete"], "shipping_configured": configured(store, settings.shipping_config_dir, market)}
+        except Exception:
+            return {"error": "unavailable"}
+
+    def _worker_health(store: StoreId) -> dict:
+        try:
+            return worker.health(store)
+        except Exception:
+            return {"error": "unavailable"}
 
     app.include_router(catalog.router)
     app.include_router(account.router)
@@ -167,6 +218,8 @@ def create_app(settings: Settings | None = None, llm: OllamaClient | None | bool
     app.include_router(checkout.router)
     app.include_router(chat.router)
     app.include_router(voice_phone.router)
+    app.include_router(staff.router)
+    app.include_router(care.router)
     return app
 
 

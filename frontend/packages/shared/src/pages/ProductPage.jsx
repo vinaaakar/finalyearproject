@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useStore } from '../StoreApp.jsx';
-import { StockBadge } from '../components/ProductCard.jsx';
+import { Price, StockBadge } from '../components/ProductCard.jsx';
 import ProductImage from '../components/ProductImage.jsx';
 
 const LINE_LIMIT = 10; // the server's per-item limit (it re-checks every request)
@@ -87,7 +87,7 @@ export default function ProductPage() {
         <div className="detail-info">
           <p className="product-category">{p.category}</p>
           <h1>{p.name}</h1>
-          <p className="detail-price">{p.price}</p>
+          <p className="detail-price"><Price product={p} className="" /></p>
           <p className="detail-stock"><StockBadge product={p} /> <span>{stockLine}</span></p>
           <p className="detail-desc">{p.description}</p>
 

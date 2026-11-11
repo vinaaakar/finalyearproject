@@ -120,8 +120,13 @@ def test_model_never_sees_unsupported_policy_claims(settings):
 
 
 def test_stored_policy_problems_are_reported_not_hidden(client):
+    # Phase A (migration 0004 + corrected seed) removed the stored claims, so a correctly seeded store reports none …
     warnings = client.get("/api/health").json()["policy_warnings"]
-    assert warnings == {"store-a": ["payment", "returns"], "store-b": ["payment", "returns"]}
+    assert warnings == {}   # stores without problems are omitted
+    # … while the pre-0004 text is still detected (the detector itself is unchanged).
+    old = {"payment": {"summary": "We accept major cards, PayPal and gift cards.", "details": "Visa and PayPal."},
+           "returns": {"summary": "60 days.", "details": "Return shipping is free with the prepaid label from your account."}}
+    assert truth.policy_content_warnings(old) == ["payment: card / wallet / gift-card payments", "returns: prepaid return label"]
 
 
 def test_strip_unsupported_keeps_business_rules():

@@ -20,6 +20,8 @@ const STRINGS = {
   placeholder: { ta: 'தட்டச்சு செய்யுங்கள் அல்லது மைக்கைத் தட்டுங்கள்', en: 'Type or tap the mic', hi: 'टाइप करें या माइक दबाएँ' },
   typeLabel: { ta: 'உங்கள் செய்தியைத் தட்டச்சு செய்யுங்கள்', en: 'Type your message', hi: 'अपना संदेश टाइप करें' },
   listening: { ta: 'கேட்கிறேன்', en: 'Listening', hi: 'सुन रहे हैं' },
+  speaking: { ta: '{assistant} பேசுகிறார்', en: '{assistant} is speaking', hi: '{assistant} बोल रहा है' },
+  stopSpeaking: { ta: 'நிறுத்து', en: 'Stop', hi: 'रोकें' },
   transcribing: { ta: 'எழுத்தாக்குகிறேன்', en: 'Transcribing', hi: 'लिख रहे हैं' },
   send: { ta: 'அனுப்பு', en: 'Send', hi: 'भेजें' },
   speak: { ta: 'உங்கள் கேள்வியைப் பேசுங்கள்', en: 'Speak your question', hi: 'अपना सवाल बोलिए' },
@@ -29,6 +31,7 @@ const STRINGS = {
   viewCart: { ta: 'கார்ட்டைப் பார்', en: 'View cart', hi: 'कार्ट देखें' },
   // Results of the chat's action buttons. Shown only after the store's API confirms the action.
   actionAdded: { ta: '{qty} × {name} உங்கள் கார்ட்டில் சேர்க்கப்பட்டது.', en: 'Added {qty} × {name} to your cart.', hi: '{qty} × {name} आपके कार्ट में जोड़ दिया गया।' },
+  actionRemoved: { ta: '{name} உங்கள் கார்ட்டிலிருந்து நீக்கப்பட்டது.', en: 'Removed {name} from your cart.', hi: '{name} आपके कार्ट से हटा दिया गया।' },
   actionCancelled: { ta: 'ஆர்டர் {number} ரத்து செய்யப்பட்டது.', en: 'Order {number} has been cancelled.', hi: 'ऑर्डर {number} रद्द कर दिया गया है।' },
   actionFailed: { ta: 'அதைச் செய்ய முடியவில்லை:', en: 'That didn’t work:', hi: 'यह नहीं हो पाया:' },
   confirmCancel: { ta: 'ஆம், ஆர்டர் {number}-ஐ ரத்து செய்', en: 'Yes, cancel order {number}', hi: 'हाँ, ऑर्डर {number} रद्द करें' },

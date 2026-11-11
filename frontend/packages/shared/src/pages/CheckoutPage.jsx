@@ -1,31 +1,65 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { newIdempotencyKey } from '../api.js';
 import { useStore } from '../StoreApp.jsx';
-import { CartSummary } from './CartPage.jsx';
+import { CartSummary, PriceNotice } from './CartPage.jsx';
 import { ErrorNotice } from './AuthPages.jsx';
 import ProductImage from '../components/ProductImage.jsx';
 
-const STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
-const EMPTY = { full_name: '', line1: '', line2: '', city: '', region: '', postal_code: '' };
+// Country-aware checkout. The server describes every country the store's checkout offers (GET /checkout/address-options:
+// regions with their names, postal format, phone, labels, currency, whether delivery rates and prices exist) and prices
+// the order for the chosen destination in that destination's currency. There is NO built-in fallback form: if the
+// countries can't be loaded the page says so and offers a retry, rather than silently showing a US-only form (which is
+// what an Indian customer saw while the server was older: US state codes such as "TN" = Tennessee, ZIP validation,
+// "United States addresses only" and US shipping).
+const EMPTY = { full_name: '', line1: '', line2: '', city: '', region: '', postal_code: '', phone: '', country: '' };
+// HTML pattern attributes are anchored already.
+const htmlPattern = (p) => p.replace(/^\^/, '').replace(/\$$/, '');
+const CURRENCY_NAMES = { INR: 'Indian rupees (₹)', USD: 'US dollars ($)' };
 
 export default function CheckoutPage() {
-  const { api, session, config } = useStore();
+  const { api, session, config, deliveryCountry } = useStore();
   const navigate = useNavigate();
   const [step, setStep] = useState('shipping');
   const [address, setAddress] = useState(() => ({ ...EMPTY, full_name: session?.customer.name || '' }));
   const [method, setMethod] = useState('standard');
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState(null);
+  const [optionsError, setOptionsError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [countries, setCountries] = useState(null);   // the countries this store ships to, with their rules
   // One key per review: resubmitting (double click, retry after a network error) cannot create a second order.
   const idemKey = useRef(newIdempotencyKey());
   const set = (k) => (e) => setAddress((a) => ({ ...a, [k]: e.target.value }));
+  const country = countries?.find((c) => c.code === address.country) || null;
 
+  const loadOptions = useCallback(() => {
+    if (!session) return () => {};
+    let live = true;
+    setOptionsError(null);
+    api.addressOptions().then((d) => {
+      if (!live) return;
+      if (!d?.countries?.length) { setOptionsError(new Error('This store has no delivery countries set up.')); return; }
+      setCountries(d.countries);
+      // The shopper's own choice ("Deliver to") wins; otherwise the server's default (last order's country, else the store's).
+      const chosen = d.countries.some((c) => c.code === deliveryCountry) ? deliveryCountry : null;
+      setAddress((a) => ({ ...a, country: chosen || d.default_country || d.countries[0].code }));
+    }, (e) => live && setOptionsError(e));
+    return () => { live = false; };
+  }, [api, session]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => loadOptions(), [loadOptions]);
+
+  // Prices for the destination: the country (and, once complete, state and postal code) decide currency and rates.
+  const postalOk = !!country && new RegExp(country.postal_pattern).test(address.postal_code);
+  const destination = country ? { country: country.code, ...(address.region ? { region: address.region } : {}),
+    ...(postalOk ? { postal_code: address.postal_code } : {}) } : null;
+  const destKey = destination ? JSON.stringify(destination) : '';
   useEffect(() => {
-    if (!session) return;
-    api.quote(method).then(setQuote, (e) => setError(e));
-  }, [api, session, method]);
+    if (!session || !destination) return;
+    let live = true;
+    api.quote(method, destination).then((q) => live && setQuote(q), (e) => live && setError(e));
+    return () => { live = false; };
+  }, [api, session, method, destKey]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!session) {
     return (
@@ -38,8 +72,37 @@ export default function CheckoutPage() {
     );
   }
   if (session.customer.role === 'agent') return <p className="empty">Staff accounts can’t place orders.</p>;
-  if (!quote) return error ? <ErrorNotice error={error} /> : <p className="muted" aria-live="polite">Loading…</p>;
+  if (optionsError) {
+    return (
+      <div className="card form">
+        <h1>Checkout</h1>
+        <p className="notice notice-error" role="alert">
+          The delivery countries couldn’t be loaded, so checkout can’t continue yet. Nothing has been ordered and your cart is kept.
+        </p>
+        <button type="button" className="btn btn-primary" onClick={loadOptions}>Try again</button>
+      </div>
+    );
+  }
+  if (!quote || !country) return error ? <ErrorNotice error={error} /> : <p className="muted" aria-live="polite">Loading…</p>;
   if (quote.items.length === 0) return <div className="empty"><p>Your cart is empty.</p><Link className="btn" to="/">Continue shopping</Link></div>;
+
+  // Amounts are shown only in the destination's own currency (never another currency's figures relabelled).
+  // A quote in another currency than the destination's (e.g. an older server pricing India in US dollars) is shown with
+  // no amounts and no shipping options at all.
+  const foreign = !!country.currency && quote.currency !== country.currency;
+  const view = foreign ? { ...quote, currency: country.currency, prices_available: false, shipping: null, shipping_cents: null,
+    shipping_options: [], shipping_available: false, items: quote.items.map((i) => ({ ...i, line_total: null, unit_price: null })) } : quote;
+  const priced = view.prices_available !== false;
+  const shippingAvailable = view.shipping_available !== false && view.shipping_options.length > 0;
+  const stockProblems = quote.problems.length > 0;
+  const canPlace = priced && shippingAvailable && quote.can_checkout;
+
+  function changeCountry(e) {
+    const code = e.target.value;
+    // State and postal code belong to one country; everything else the customer typed is kept.
+    setAddress((a) => ({ ...a, country: code, region: '', postal_code: '' }));
+    setMethod('standard');
+  }
 
   function toReview(e) {
     e.preventDefault();
@@ -48,18 +111,22 @@ export default function CheckoutPage() {
     setStep('review');
   }
 
+  function shippingBody() {
+    const { phone, ...base } = address;
+    return { ...base, line2: address.line2.trim() || null, ...(phone.trim() ? { phone: phone.trim() } : {}) };
+  }
+
   async function placeOrder() {
     setBusy(true);
     setError(null);
     try {
-      const shipping = { ...address, line2: address.line2.trim() || null };
-      const r = await api.checkout({ shipping, shippingMethod: method, expectedTotalCents: quote.total_cents, idempotencyKey: idemKey.current });
+      const r = await api.checkout({ shipping: shippingBody(), shippingMethod: method, expectedTotalCents: quote.total_cents, idempotencyKey: idemKey.current });
       navigate(`/orders/${r.order.order_number}/pay`, { replace: true });
     } catch (e) {
       setError(e);
       if (e.status === 409 || e.status === 422) {
         // Prices, stock or the address changed/failed: show the server's current numbers and let the customer re-review.
-        api.quote(method).then(setQuote, () => {});
+        api.quote(method, destination).then(setQuote, () => {});
         idemKey.current = newIdempotencyKey();
       }
       if (e.status === 422) setStep('shipping');
@@ -67,6 +134,14 @@ export default function CheckoutPage() {
       setBusy(false);
     }
   }
+
+  const regionName = country.regions.find((r) => r.code === address.region)?.name || address.region;
+  const shippingNotice = (
+    <p className="notice notice-warn" role="status">
+      Shipping rates not configured: {config.name} hasn’t set delivery rates for {country.name}
+      {address.region ? ` (${regionName})` : ''} yet, so an order can’t be placed. Your cart is kept.
+    </p>
+  );
 
   return (
     <section className="page-section">
@@ -84,51 +159,77 @@ export default function CheckoutPage() {
           {step === 'shipping' ? (
             <form className="card checkout-form" onSubmit={toReview}>
               <h2>Shipping address</h2>
+              {countries.length > 1 ? (
+                <>
+                  <label htmlFor="ship-country">Country / Region</label>
+                  <select id="ship-country" autoComplete="shipping country" required value={address.country} onChange={changeCountry}>
+                    {countries.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+                  </select>
+                </>
+              ) : (
+                <p className="checkout-country" data-testid="ship-country">Delivering to <strong>{country.name}</strong></p>
+              )}
               <label htmlFor="ship-name">Full name</label>
               <input id="ship-name" autoComplete="shipping name" required maxLength={100} value={address.full_name} onChange={set('full_name')} />
-              <label htmlFor="ship-line1">Address</label>
+              <label htmlFor="ship-line1">{country.line1_label}</label>
               <input id="ship-line1" autoComplete="shipping address-line1" required maxLength={120} value={address.line1} onChange={set('line1')} />
-              <label htmlFor="ship-line2">Apartment, suite, etc. (optional)</label>
+              <label htmlFor="ship-line2">{country.line2_label}</label>
               <input id="ship-line2" autoComplete="shipping address-line2" maxLength={120} value={address.line2} onChange={set('line2')} />
               <div className="form-row">
                 <div>
-                  <label htmlFor="ship-city">City</label>
+                  <label htmlFor="ship-city">{country.city_label}</label>
                   <input id="ship-city" autoComplete="shipping address-level2" required maxLength={80} value={address.city} onChange={set('city')} />
                 </div>
                 <div>
-                  <label htmlFor="ship-region">State</label>
+                  <label htmlFor="ship-region">{country.region_label}</label>
                   <select id="ship-region" autoComplete="shipping address-level1" required value={address.region} onChange={set('region')}>
                     <option value="">Select…</option>
-                    {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {country.regions.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="ship-zip">ZIP code</label>
-                  <input id="ship-zip" autoComplete="shipping postal-code" inputMode="numeric" required pattern="\d{5}(-\d{4})?"
-                    title="5-digit ZIP code" maxLength={10} value={address.postal_code} onChange={set('postal_code')} />
+                  <label htmlFor="ship-zip">{country.postal_label}</label>
+                  {/* key: a new input per country, so no previous country's pattern or value survives a switch */}
+                  <input key={country.code} id="ship-zip" autoComplete="shipping postal-code" inputMode="numeric" required
+                    pattern={htmlPattern(country.postal_pattern)} title={`${country.postal_label}, for example ${country.postal_example}`}
+                    maxLength={country.code === 'IN' ? 6 : 10} value={address.postal_code} onChange={set('postal_code')} />
                 </div>
               </div>
-              <p className="field-help">United States addresses only.</p>
-              <fieldset className="ship-methods">
-                <legend>Shipping method</legend>
-                {quote.shipping_options.map((o) => (
-                  <label key={o.method} className="radio">
-                    <input type="radio" name="ship-method" value={o.method} checked={method === o.method} onChange={() => setMethod(o.method)} />
-                    {o.label} — {o.cents === 0 ? 'Free' : o.price}
-                  </label>
-                ))}
-              </fieldset>
+              {country.phone && (
+                <>
+                  <label htmlFor="ship-phone">{country.phone.required ? 'Mobile number' : 'Phone number (optional)'}</label>
+                  <div className="phone-field">
+                    <span className="phone-prefix" aria-hidden="true">{country.phone.dial_code}</span>
+                    <input id="ship-phone" type="tel" autoComplete="shipping tel-national" inputMode="tel" required={country.phone.required}
+                      maxLength={20} pattern="[+0-9 ().\-]{10,20}" aria-describedby="ship-phone-help"
+                      title={`10-digit number, for example ${country.phone.example}`} value={address.phone} onChange={set('phone')} />
+                  </div>
+                  <p id="ship-phone-help" className="field-help">Country code {country.phone.dial_code}. For example {country.phone.example}.</p>
+                </>
+              )}
+              <PriceNotice cart={view} storeName={config.name} />
+              {!shippingAvailable ? shippingNotice : (
+                <fieldset className="ship-methods">
+                  <legend>Shipping method</legend>
+                  {view.shipping_options.map((o) => (
+                    <label key={o.method} className="radio">
+                      <input type="radio" name="ship-method" value={o.method} checked={method === o.method} onChange={() => setMethod(o.method)} />
+                      {o.label}{priced && <> — {o.cents === 0 ? 'Free' : o.price}</>}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
               <ErrorNotice error={error} />
-              <button className="btn btn-primary" type="submit" disabled={!quote.can_checkout}>Review order</button>
+              <button className="btn btn-primary" type="submit" disabled={stockProblems}>Review order</button>
             </form>
           ) : (
             <div className="card">
               <h2>Review your order</h2>
               <ul className="review-lines">
-                {quote.items.map((i) => (
+                {view.items.map((i) => (
                   <li key={i.slug}>
                     <span className="review-item"><ProductImage product={i} size="thumb" /><span>{i.quantity} × {i.name}</span></span>
-                    <span>{i.line_total}</span>
+                    <span>{priced && i.line_total ? i.line_total : 'Price not set'}</span>
                   </li>
                 ))}
               </ul>
@@ -136,14 +237,19 @@ export default function CheckoutPage() {
               <h3>Ship to</h3>
               <address className="review-address">
                 {address.full_name}<br />{address.line1}{address.line2 && <>, {address.line2}</>}<br />
-                {address.city}, {address.region} {address.postal_code}, US
+                {address.city}, {regionName} {address.postal_code}, {country.name}
+                {address.phone.trim() && <><br />{address.phone.trim().startsWith('+') ? address.phone.trim() : `${country.phone?.dial_code || ''} ${address.phone.trim()}`}</>}
               </address>
-              <p className="muted">Shipping: {quote.shipping_options.find((o) => o.method === method)?.label}</p>
+              {priced && <p className="muted">Prices in {CURRENCY_NAMES[quote.currency] || quote.currency}.</p>}
+              <PriceNotice cart={view} storeName={config.name} />
+              {shippingAvailable
+                ? <p className="muted">Shipping: {view.shipping_options.find((o) => o.method === method)?.label}</p>
+                : shippingNotice}
               <ErrorNotice error={error} />
               <div className="detail-actions">
                 <button type="button" className="btn" onClick={() => setStep('shipping')} disabled={busy}>Edit shipping</button>
-                <button type="button" className="btn btn-primary" onClick={placeOrder} disabled={busy || !quote.can_checkout}>
-                  {busy ? 'Placing order…' : `Place order · ${quote.total}`}
+                <button type="button" className="btn btn-primary" onClick={placeOrder} disabled={busy || !canPlace}>
+                  {busy ? 'Placing order…' : canPlace ? `Place order · ${quote.total}` : 'Place order'}
                 </button>
               </div>
               <p className="field-help">You’ll pay on the next step. {config.name} payments run in sandbox test mode.</p>
@@ -152,7 +258,7 @@ export default function CheckoutPage() {
         </div>
         <aside className="card cart-aside" aria-label="Order summary">
           <h2>Summary</h2>
-          <CartSummary cart={quote} />
+          <CartSummary cart={view} />
         </aside>
       </div>
     </section>

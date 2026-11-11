@@ -283,7 +283,8 @@ def test_return_answers_use_each_stores_own_policy_and_delivery_date(client):
     alex = login(client, "store-a", ALEX, PW_A)
     body = ask(client, "store-a", "I want to return my boots", alex)
     assert "Order SA-10002 was delivered on" in body["reply"] and "60-day policy" in body["reply"]
-    assert "returns can't be started from this chat" in body["reply"]
+    # A return request is now registered from the chat (care_flow.py): it asks for what's missing, nothing is submitted yet.
+    assert body["care_draft"]["kind"] == "return" and body["care_draft"]["order"] == "SA-10002" and body["care_reference"] is None
     b = ask(client, "store-b", "How do I return an item?")
     assert "30 days" in b["reply"] and "60" not in b["reply"]
 
@@ -319,9 +320,10 @@ def test_unsupported_capabilities_are_explained_honestly(client, message, must, 
 def test_human_request_is_honest_and_summarises_the_problem(client):
     hist = turns(("user", "My headlamp stopped working after a week"), ("assistant", "I'm sorry it isn't working properly."))
     body = ask(client, "store-a", "I want to talk to a human", history=hist)
-    assert "can't transfer you to a live agent or create a ticket" in body["reply"]
+    # Signed out: a human-help request can be recorded only for an account; the store's contact is offered, and the
+    # reply never pretends someone is live. (Signed in, the request is registered: tests/test_care_assistant.py.)
+    assert "sign in" in body["reply"] and "Nobody is live in this chat" in body["reply"] and body["requires_login"]
     assert EMAIL_A in body["reply"] and "Mon–Fri 8am–6pm MT" in body["reply"]          # from the store profile
-    assert "“My headlamp stopped working after a week”" in body["reply"]
     assert not re.search(r"ticket (has been|was) created|agent will (call|contact)|callback", body["reply"], re.I)
 
 

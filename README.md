@@ -14,7 +14,9 @@ text and speech, in that language (see docs/voice.md).
 | Storefront | http://127.0.0.1:5180 | http://127.0.0.1:5181 |
 | Database | `store_a` (role `store_a_app`) | `store_b` (role `store_b_app`) |
 | Order numbers | `SA-xxxxx` | `BB-xxxxx` (new orders start at 50001) |
-| Shipping | $6.95, free over $75, expedited $14.95; contiguous US only | $4.99, free over $50 |
+| Market | India only, prices in ₹ (INR, academic demonstration price list — no currency conversion) | India only, ₹ (INR) |
+| Shipping (demo) | ₹149 anywhere in India, free from ₹4,999; no delivery time promised | ₹79, free from ₹999; no delivery time promised |
+| Support hours | stored as "Mon–Fri 8am–6pm MT" (a US time zone left from the original demo data — **to be confirmed before the final demonstration**) | stored as "Every day 9am–8pm ET" (same — to be confirmed) |
 
 All data is **synthetic** (fictional people, `example.com` emails). **Payments are sandbox-only**:
 no real money moves and no card details are collected anywhere.
@@ -34,7 +36,7 @@ scripts/stop.sh      # stop app processes (add --db to also stop the Postgres co
 ```
 
 After pulling new code, apply migrations without touching existing data:
-`cd backend && .venv/bin/python -m app.migrate && .venv/bin/python -m app.seed` (the seed step only backfills new settings when data exists).
+`cd backend && .venv/bin/python -m app.migrate --plan --backup backups/db-<ts>` then `--apply …` and `.venv/bin/python -m app.seed` (the seed step only backfills new settings when data exists).
 
 If Ollama is not running, the assistant automatically uses deterministic rule-based replies.
 
@@ -52,7 +54,9 @@ If Ollama is not running, the assistant automatically uses deterministic rule-ba
 You can also create accounts at `/register` (per store). Password reset emails are not sent; in
 development they are written to `.run/outbox/` (git-ignored, owner-only files).
 
-Phone-verification ZIP codes: SA-10001 → `80302`, BB-20001 → `60614` (see `backend/app/seed.py`).
+The seeded orders above are the **original US-dollar demo orders** (US ZIP codes, demo carriers); they are kept unchanged as
+historical records. New orders are India orders in ₹ with a six-digit PIN code. Phone verification for the seeded orders uses
+their ZIP codes: SA-10001 → `80302`, BB-20001 → `60614`; for new orders, their PIN code (see `backend/app/seed.py`).
 
 ---
 
@@ -123,7 +127,9 @@ docs/               voice and phone integration notes
   re-checks stock and prices, and creates the order, its items and the stock decrement in **one transaction**.
   It requires an `Idempotency-Key`: repeated or concurrent submissions return the original order (tested with
   4 parallel submissions). If the total changed since the customer reviewed it, checkout stops with `409`.
-  Addresses are validated on the server (US state, ZIP format; Store A refuses AK/HI).
+  Addresses are validated on the server: India only — one of the 36 states / union territories, a six-digit PIN code and an
+  Indian mobile number (`app/markets.py`). The US rules (state, ZIP) remain only for the legacy US market setting used by
+  the regression tests.
 - **Payments**: provider interface plus a **sandbox** provider. The order moves to "processing" only
   after the server asks the provider for the status and the amount and currency match the order;
   the verify endpoint takes no status from the client. No card fields exist anywhere (unknown fields are
@@ -142,7 +148,8 @@ docs/               voice and phone integration notes
   30/min, everything else 120/min.
 - **Logs and errors** contain no tokens, passwords, credentials, audio or email bodies. `Settings`
   hides the secret key and database URLs from `repr`, so they don't appear in tracebacks.
-- **Phone callers** must give both the order number and the shipping ZIP; 3 failures end the call.
+- **Phone callers** must give both the order number and the shipping postal code (a six-digit PIN code for India orders;
+  the ZIP code of a legacy US demo order); 3 failures end the call.
 
 ## Customer care
 
@@ -211,7 +218,7 @@ Interactive docs: http://127.0.0.1:8000/docs. `{store}` is `store-a` or `store-b
 variable, including `PAYMENT_PROVIDER`, `EMAIL_DELIVERY`, `STORE_*_PUBLIC_URL`, `SPEECH_STT`,
 `WHISPER_MODEL_PATH`, `SPEECH_TTS`. `python -m app.config` (from `backend/`) validates it; `start.sh` runs it.
 
-Database changes: add `backend/migrations/000N_description.sql`, then `python -m app.migrate`.
+Database changes: add `backend/migrations/000N_description.sql` (additive; the runner refuses destructive statements), then `python -m app.migrate --plan/--apply --backup …` (see `docs/database-safety.md`).
 Reseed demo data (destructive): `python -m app.seed --reset`.
 
 ## Testing
@@ -269,13 +276,23 @@ and the local voice loop using Chrome's fake microphone device.
 - Tokens are kept in `sessionStorage` (bearer tokens, revocable server-side). An httpOnly-cookie session with
   CSRF protection would be stronger against XSS for production.
 
-## Storage notes
+## Local AI models (not included in this repository)
 
-The app adds about **270 MB** locally (venv ~67 MB, node_modules ~44 MB, plus the Postgres volume).
-No models were downloaded: local STT reuses the existing `whisper-cli` and the `ggml-base.en.bin` model in
-`~/.baymax/models` (read-only). **The disk had only about 2 GB free** during this work, so free some space before
-downloading anything larger. `scripts/backup_to_drive.sh` (run manually) writes a source + database-dump
-archive, **excluding `.env`**, to `My Drive/AI-Voice-Commerce/project-backups`.
+Model weights are large binaries and are **not** committed (`models/` is git-ignored). Obtain them yourself:
+
+* **Speech recognition (whisper.cpp):** install `whisper-cli` (`brew install whisper-cpp`), then download the official
+  `ggml-base.bin` (multilingual, ~148 MB) and `ggml-base.en.bin` (~148 MB) with whisper.cpp's own
+  `models/download-ggml-model.sh base` / `base.en` (from the whisper.cpp repository; the files are hosted on Hugging Face
+  under `ggerganov/whisper.cpp`). Then copy them into the project with
+  `scripts/setup_speech_models.sh --multilingual <ggml-base.bin> --english <ggml-base.en.bin>` — it refuses any file whose
+  SHA-1 differs from the published one (`465707469ff3…` and `137c40403d78…`). With `WHISPER_MODEL_PATH` /
+  `WHISPER_EN_MODEL_PATH` unset in `.env`, the backend uses `models/whisper/`.
+* **Language model (optional):** install Ollama and run `ollama pull llama3.2:3b`. Without it the assistant uses its
+  rule-based replies.
+
+Local footprint: about 270 MB (Python venv, node_modules, the Postgres volume) plus about 300 MB of speech models.
+`scripts/backup_to_drive.sh` (run manually) writes a source + database-dump archive, **excluding `.env`**, to a local
+Google Drive folder.
 
 ## Troubleshooting
 
@@ -286,3 +303,15 @@ archive, **excluding `.env`**, to `My Drive/AI-Voice-Commerce/project-backups`.
 - Replies tagged "quick answer" came from the deterministic path: order/cart answers always do,
   and other answers do when Ollama is off or a model reply failed the grounding check.
 - After this update, sign in again: tokens issued before sessions existed are rejected.
+
+## Production-readiness documents (roadmap phases A, E–J)
+
+| Topic | Document |
+|---|---|
+| Business information that needs the owner (identity, policies, prices) | `docs/business-information.md` |
+| Order fulfilment for staff (`/staff/orders`) | `docs/fulfilment.md` |
+| Migrations, backups, recovery | `docs/database-safety.md`, `docs/migration-runner-safety.md` |
+| Background worker (`python -m app.worker`) | `docs/scheduler-architecture.md` |
+| Voice testing (microphone workflow, `scripts/voice_eval.py`) | `docs/voice-testing.md` |
+| India market configuration | `docs/india-readiness.md` |
+| Production deployment, security review | `docs/production-deployment.md` |

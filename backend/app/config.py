@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from typing import Any
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -73,6 +74,23 @@ class Settings:
     trusted_proxies: tuple[str, ...] = ()
     # Interactive API docs (/docs, /redoc, /openapi.json): development only unless API_DOCS_ENABLED=true.
     api_docs_enabled: bool = False
+    # Background worker (Phase G, `python -m app.worker`): unpaid orders hold reserved stock, so the worker cancels
+    # them after this long (an operational setting the owner should confirm; docs/business-information.md).
+    # Market per store (app/markets.py). This project is India-only: both stores sell in India, in INR, using owner-
+    # approved (here: academic demonstration) prices from product_prices — never converted from the USD catalogue.
+    # STORE_A_MARKET / STORE_B_MARKET=US keeps the original US behaviour (used by the legacy regression tests).
+    store_markets: dict[str, str] = field(default_factory=lambda: {"store-a": "IN", "store-b": "IN"})
+    # Phase J: HttpOnly cookie sessions + CSRF double-submit instead of bearer tokens in browser storage.
+    auth_cookies: bool = False
+    # Country-aware checkout: countries each store's checkout offers, the default for NEW customers (customers with
+    # earlier orders default to the country of their last order), and where owner-configured non-US rates live.
+    checkout_countries: tuple[str, ...] = ("IN",)
+    default_checkout_country: dict[str, str] = field(default_factory=lambda: {"store-a": "IN", "store-b": "IN"})
+    shipping_config_dir: Path = field(default=PROJECT_ROOT / "config" / "shipping")
+    smtp: Any = field(default=None, repr=False)        # notify.SmtpConfig when EMAIL_DELIVERY=smtp
+    log_format: str = "text"                           # text | json
+    unpaid_order_ttl_minutes: int = 1440
+    worker_max_attempts: int = 10
 
 
 def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_ENV_FILE) -> Settings:
@@ -141,7 +159,16 @@ def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_EN
 
     app_env = get("APP_ENV", "development")
     email_delivery = merged.get("EMAIL_DELIVERY", "dev_outbox" if app_env == "development" else "none").strip().lower()
-    if email_delivery not in ("dev_outbox", "none"):
+    smtp = None
+    if email_delivery == "smtp":
+        from .notify import SmtpConfig
+        host, sender = merged.get("SMTP_HOST", "").strip(), merged.get("SMTP_FROM", "").strip()
+        port = merged.get("SMTP_PORT", "587").strip()
+        if not host or not sender or not port.isdigit():
+            errors.append("EMAIL_DELIVERY=smtp needs SMTP_HOST, SMTP_PORT and SMTP_FROM (and usually SMTP_USERNAME/SMTP_PASSWORD)")
+        else:
+            smtp = SmtpConfig(host, int(port), merged.get("SMTP_USERNAME", "").strip(), merged.get("SMTP_PASSWORD", ""), sender)
+    if email_delivery not in ("dev_outbox", "none", "smtp"):
         errors.append("EMAIL_DELIVERY must be 'dev_outbox' or 'none'")
 
     public_urls = {
@@ -155,10 +182,22 @@ def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_EN
     speech_stt = merged.get("SPEECH_STT", "none").strip().lower()
     if speech_stt not in ("none", "whisper_cpp"):
         errors.append("SPEECH_STT must be 'none' or 'whisper_cpp'")
-    whisper_model = merged.get("WHISPER_MODEL_PATH", "").strip()
+    # Unset → the verified project copies made by scripts/setup_speech_models.sh, if present (models/ is git-ignored).
+    project_models = PROJECT_ROOT / "models" / "whisper"
+    whisper_model = merged.get("WHISPER_MODEL_PATH", "").strip() or (
+        str(project_models / "ggml-base.bin") if (project_models / "ggml-base.bin").is_file() else "")
     if speech_stt == "whisper_cpp" and not (whisper_model and Path(whisper_model).expanduser().is_file()):
         errors.append("WHISPER_MODEL_PATH must point to an existing ggml model file when SPEECH_STT=whisper_cpp")
-    whisper_en_model = merged.get("WHISPER_EN_MODEL_PATH", "").strip()
+    default_country = {s: merged.get(f"{s.upper().replace('-', '_')}_DEFAULT_COUNTRY", "IN").strip().upper() for s in ("store-a", "store-b")}
+    for s, c in default_country.items():
+        if c not in ("IN", "US"):
+            errors.append(f"{s.upper().replace('-', '_')}_DEFAULT_COUNTRY must be IN or US")
+    store_markets = {s: merged.get(f"{s.upper().replace('-', '_')}_MARKET", "IN").strip().upper() for s in ("store-a", "store-b")}
+    for s, m in store_markets.items():
+        if m not in ("US", "IN"):
+            errors.append(f"{s.upper().replace('-', '_')}_MARKET must be US or IN")
+    whisper_en_model = merged.get("WHISPER_EN_MODEL_PATH", "").strip() or (
+        str(project_models / "ggml-base.en.bin") if (project_models / "ggml-base.en.bin").is_file() else "")
     if whisper_en_model and not Path(whisper_en_model).expanduser().is_file():
         errors.append("WHISPER_EN_MODEL_PATH must point to an existing ggml model file")
     speech_languages = tuple(dict.fromkeys(c.strip().lower() for c in merged.get("SPEECH_LANGUAGES", "ta,en,hi").split(",") if c.strip()))
@@ -202,6 +241,16 @@ def load_settings(env: dict[str, str] | None = None, env_file: Path = DEFAULT_EN
         in ("1", "true", "yes"),
         payment_provider=payment_provider,
         password_reset_ttl_minutes=get_int("PASSWORD_RESET_TTL_MINUTES", "30"),
+        unpaid_order_ttl_minutes=get_int("UNPAID_ORDER_TTL_MINUTES", "1440", minimum=15),
+        store_markets=store_markets,
+        # India-only unless a store is explicitly configured for the US market.
+        checkout_countries=("IN",) if set(store_markets.values()) == {"IN"} else ("IN", "US"),
+        auth_cookies=merged.get("AUTH_COOKIES", "false").strip().lower() == "true",
+        default_checkout_country=default_country,
+        shipping_config_dir=Path(merged.get("SHIPPING_CONFIG_DIR", "").strip() or PROJECT_ROOT / "config" / "shipping").expanduser(),
+        smtp=smtp,
+        log_format="json" if merged.get("LOG_FORMAT", "text").strip().lower() == "json" else "text",
+        worker_max_attempts=get_int("WORKER_MAX_ATTEMPTS", "10"),
         email_delivery=email_delivery,
         store_public_urls=public_urls,
         speech_stt=speech_stt,

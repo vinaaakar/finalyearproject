@@ -1,0 +1,50 @@
+{
+  "_about": "ACADEMIC DEMONSTRATION RATES for the AI Voice Commerce final-year project: not a real courier, partner or delivery service, and no delivery time is promised. Amounts in paise (INR). Format: backend/app/shipping_zones.py.",
+  "IN": [
+    {
+      "name": "All India (demonstration rate)",
+      "currency": "INR",
+      "regions": [
+        "AP",
+        "AR",
+        "AS",
+        "BR",
+        "CG",
+        "GA",
+        "GJ",
+        "HR",
+        "HP",
+        "JH",
+        "KA",
+        "KL",
+        "MP",
+        "MH",
+        "MN",
+        "ML",
+        "MZ",
+        "NL",
+        "OD",
+        "PB",
+        "RJ",
+        "SK",
+        "TN",
+        "TG",
+        "TR",
+        "UP",
+        "UT",
+        "WB",
+        "AN",
+        "CH",
+        "DH",
+        "DL",
+        "JK",
+        "LA",
+        "LD",
+        "PY"
+      ],
+      "standard_cents": 14900,
+      "expedited_cents": null,
+      "free_over_cents": 499900
+    }
+  ]
+}

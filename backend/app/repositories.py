@@ -16,7 +16,8 @@ from .stores import StoreId
 _PRODUCT_COLS = "id, sku, slug, name, category, description, price_cents, stock_qty, emoji"
 _ORDER_COLS = (
     "o.id, o.order_number, o.customer_id, o.status, o.carrier, o.tracking_number, "
-    "o.estimated_delivery, o.total_cents, o.placed_at, o.updated_at, o.subtotal_cents, o.shipping_cents, o.shipping_method"
+    "o.estimated_delivery, o.total_cents, o.placed_at, o.updated_at, o.subtotal_cents, o.shipping_cents, o.shipping_method, "
+    "o.tracking_url, o.shipped_at, o.delivered_at, o.currency"
 )
 
 
@@ -163,6 +164,90 @@ def get_order_for_customer(store: StoreId, order_number: str, customer_id: int) 
         return _attach_items(conn, order) if order else None
 
 
+_ADDRESS_COLS = ("o.shipping_name, o.shipping_line1, o.shipping_line2, o.shipping_city, o.shipping_region, "
+                 "o.shipping_postal_code, o.shipping_country, o.shipping_phone")
+
+
+def last_order_country(store: StoreId, customer_id: int) -> str | None:
+    """Country of the customer's most recent order with a stored address (checkout's default for returning customers)."""
+    with store_connection(store) as conn:
+        # Orders from before addresses were stored (seeded history) have only a ZIP code: those are US orders.
+        row = conn.execute("SELECT coalesce(shipping_country, CASE WHEN shipping_postal_code ~ '^[0-9]{5}' THEN 'US' END) AS c "
+                           "FROM orders WHERE customer_id = %s ORDER BY placed_at DESC, id DESC LIMIT 1", [customer_id]).fetchone()
+        return row["c"].strip() if row and row["c"] else None
+
+
+def get_order_detail(store: StoreId, order_number: str, customer_id: int | None) -> dict[str, Any] | None:
+    """Order with items and shipping address. customer_id=None is the staff lookup (callers must have verified an
+    agent role for this store); otherwise only the customer's own order is returned (None = not found or not theirs)."""
+    with store_connection(store) as conn:
+        order = conn.execute(
+            f"SELECT {_ORDER_COLS}, {_ADDRESS_COLS} FROM orders o WHERE o.order_number = %s AND (%s::int IS NULL OR o.customer_id = %s::int)",
+            [order_number.upper(), customer_id, customer_id],
+        ).fetchone()
+        if order is None:
+            return None
+        _attach_items(conn, order)
+        order["history"] = get_order_history(conn, order["id"], staff=False)
+        return order
+
+
+def get_order_history(conn, order_id: int, *, staff: bool) -> list[dict[str, Any]]:
+    """Status history, oldest first. Customers see status changes and shipment details only; staff also see notes and
+    which account acted."""
+    rows = conn.execute(
+        "SELECT h.from_status, h.to_status, h.actor_role, h.note, h.carrier, h.tracking_number, h.created_at, c.full_name AS actor_name "
+        "FROM order_status_history h LEFT JOIN customers c ON c.id = h.actor_customer_id WHERE h.order_id = %s ORDER BY h.created_at, h.id",
+        [order_id],
+    ).fetchall()
+    out = []
+    for r in rows:
+        item = {"from_status": r["from_status"], "status": r["to_status"], "at": r["created_at"],
+                "carrier": r["carrier"], "tracking_number": r["tracking_number"]}
+        if staff:
+            item.update(actor_role=r["actor_role"], actor_name=r["actor_name"] if r["actor_role"] != "system" else "System", note=r["note"])
+        out.append(item)
+    return out
+
+
+def get_staff_order(store: StoreId, order_number: str) -> dict[str, Any] | None:
+    """Staff-only detail (callers must have verified an agent role for this store): order, items, address, customer name,
+    full history."""
+    with store_connection(store) as conn:
+        order = conn.execute(
+            f"SELECT {_ORDER_COLS}, {_ADDRESS_COLS}, c.full_name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id "
+            "WHERE o.order_number = %s", [order_number.upper()],
+        ).fetchone()
+        if order is None:
+            return None
+        _attach_items(conn, order)
+        order["history"] = get_order_history(conn, order["id"], staff=True)
+        return order
+
+
+def list_staff_orders(store: StoreId, *, statuses: list[str] | None = None, query: str | None = None,
+                      limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    """Staff order list, newest first, filtered by status and by order number / customer name. Returns (rows, total)."""
+    where, params = [], []
+    if statuses:
+        where.append("o.status = ANY(%s)")
+        params.append(statuses)
+    if query:
+        where.append("(o.order_number ILIKE %s OR c.full_name ILIKE %s)")
+        like = f"%{_escape_like(query)}%"
+        params += [like, like]
+    sql_where = f"WHERE {' AND '.join(where)}" if where else ""
+    with store_connection(store) as conn:
+        total = conn.execute(f"SELECT count(*) AS n FROM orders o JOIN customers c ON c.id = o.customer_id {sql_where}", params).fetchone()["n"]
+        rows = conn.execute(
+            f"SELECT {_ORDER_COLS}, c.full_name AS customer_name, "
+            "(SELECT coalesce(sum(i.quantity), 0) FROM order_items i WHERE i.order_id = o.id) AS item_count "
+            f"FROM orders o JOIN customers c ON c.id = o.customer_id {sql_where} ORDER BY o.placed_at DESC, o.id DESC LIMIT %s OFFSET %s",
+            params + [limit, offset],
+        ).fetchall()
+    return rows, total
+
+
 def get_order_by_number(store: StoreId, order_number: str) -> dict[str, Any] | None:
     """Staff-only lookup. Callers must have verified an agent role for this store."""
     with store_connection(store) as conn:
@@ -227,6 +312,11 @@ def session_is_active(store: StoreId, session_hash: str, customer_id: int) -> bo
             "SELECT 1 FROM sessions WHERE id_hash = %s AND customer_id = %s AND revoked_at IS NULL AND expires_at > now()",
             [session_hash, customer_id],
         ).fetchone() is not None
+
+
+def revoke_all_sessions(store: StoreId, customer_id: int) -> int:
+    with store_connection(store) as conn:
+        return conn.execute("UPDATE sessions SET revoked_at = now() WHERE customer_id = %s AND revoked_at IS NULL", [customer_id]).rowcount
 
 
 def revoke_session(store: StoreId, session_hash: str) -> None:

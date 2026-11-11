@@ -92,7 +92,9 @@ export default function AccountPage() {
           <p className="muted">Signed in as {session.customer.name} ({session.customer.email})</p>
         </div>
         <div className="detail-actions">
+          {!isAgent && <Link className="btn" to="/support/requests">My requests</Link>}
           {!isAgent && <Link className="btn" to="/">Continue shopping</Link>}
+          {isAgent && <Link className="btn btn-primary" to="/staff/orders">Fulfil orders</Link>}
           <button type="button" className="btn" onClick={() => api.logout()}>Sign out</button>
         </div>
       </div>
@@ -104,6 +106,7 @@ export default function AccountPage() {
           {orders.list.map((o) => (
             <li key={o.order_number}>
               <OrderCard order={o} showCustomer={isAgent} />
+              <Link className="btn btn-small" to={`/orders/${o.order_number}`} aria-label={`View details of order ${o.order_number}`}>View details</Link>{' '}
               {!isAgent && o.awaiting_payment && <Link className="btn btn-primary btn-small" to={`/orders/${o.order_number}/pay`}>Pay now</Link>}
             </li>
           ))}

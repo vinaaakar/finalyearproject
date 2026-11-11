@@ -34,7 +34,7 @@ Status legend: [x] done & verified · [~] implemented, partially verified · [ ]
 - [ ] Expire unpaid orders; refund path for late payments; staff order-status tools
 
 ## Milestone 4 — Assistant
-- [x] Recommendations only from the selected store's catalog; budget filter ("under $50"); in-stock first
+- [x] Recommendations only from the selected store's catalog; budget filter ("under ₹5,000"; a dollar budget is not converted); in-stock first
 - [x] Shipping answers include the store's real rates (policy text tested to match checkout rates)
 - [x] Cart questions answered from the owner's cart only (session or own cart token)
 - [x] Order and cart answers are deterministic (model never called)
@@ -79,7 +79,7 @@ Status legend: [x] done & verified · [~] implemented, partially verified · [ ]
 
 ## Milestone 6 — Phone
 - [x] Provider-independent interface + call state machine
-- [x] Simulator adapter, always labelled `simulated: true`; order number + ZIP verification, 3-strike lockout; works for new orders
+- [x] Simulator adapter, always labelled `simulated: true`; order number + postal-code verification (six-digit PIN for India orders, ZIP for legacy US demo orders), 3-strike lockout; works for new orders
 - [x] Integration requirements doc (docs/phone-integration.md)
 - [ ] Real telephony provider — needs credentials / SIP setup
 

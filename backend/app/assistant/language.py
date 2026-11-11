@@ -38,6 +38,9 @@ _TAMIL = re.compile(r"[஀-௿]")
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 _ARABIC = re.compile(r"[؀-ۿ]")  # whisper sometimes writes spoken Hindi in Urdu script
 _LATIN = re.compile(r"[A-Za-z]")
+# Other Indian scripts (Bengali, Gurmukhi, Gujarati, Odia, Telugu, Kannada, Malayalam, Sinhala): a language the store
+# does not support. Answering such text in the conversation language could be unreadable to the customer → clarify.
+_OTHER_INDIC = re.compile(r"[\u0980-\u0B7F\u0C00-\u0DFF]")
 # Identifiers are not language evidence.
 _IDENTIFIER = re.compile(r"\b[A-Za-z]{2}-?\d{3,}\b|\$\s?\d[\d,.]*|\b\d[\d,.:/-]*\b|\b[0-9A-Z]{8,}\b")
 
@@ -143,6 +146,8 @@ def identify(text: str, acoustic: tuple[str, float] | None = None) -> LanguageRe
         return LanguageResult(None, "uncertain", "speech+text", min(a_p, text_conf), "speech and text disagree")
 
     if text_lang is None:
+        if len(_OTHER_INDIC.findall(text)) >= 2:
+            return LanguageResult(None, "uncertain", "text", 0.0, "unsupported script")
         return LanguageResult(None, "neutral", "none", 0.0, "no language-bearing words")
     if text_conf <= 0.5:
         # e.g. a single English word like "price": could be part of any of the three languages.

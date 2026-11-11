@@ -1,0 +1,4 @@
+{
+  "_about": "Reviewed, documented accessibility violations that are known and not fixed yet (the application is not changed in Phase C). Each entry is matched by rule + store + view + theme/size + a target regex (+ optional summary regex). Anything else axe finds fails the suite; an entry that stops matching fails too. See docs/mobile-accessibility-testing.md.",
+  "known": []
+}

@@ -77,6 +77,10 @@ def policy_content_warnings(raw: dict[str, dict[str, str]]) -> list[str]:
     """Unsupported claims found in a store's stored policy text (English rows), e.g. ['payment: card / wallet …']."""
     found: list[str] = []
     for topic, p in raw.items():
+        # The system's own capability statement (written by migration 0004) is truthful even though it names the
+        # payment methods it does NOT accept.
+        if topic == "payment" and {p.get("summary", ""), p.get("details", "")} <= _CAPABILITY_TEXTS:
+            continue
         for name in sorted({n for part in (p.get("summary", ""), p.get("details", "")) for n in _unsupported(topic, part)}):
             found.append(f"{topic}: {name}")
     return found
@@ -97,6 +101,9 @@ PAYMENT_CAPABILITY = {
         "hi": "अभी इस स्टोर में ऑनलाइन भुगतान उपलब्ध नहीं है।",
     },
 }
+
+
+_CAPABILITY_TEXTS = {text for texts in PAYMENT_CAPABILITY.values() for text in texts.values()}
 
 
 def payment_capability_text(payments: Any, lang: str) -> str:
