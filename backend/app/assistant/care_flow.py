@@ -25,7 +25,9 @@ from ..stores import ORDER_PREFIX, STORE_BRANDING, StoreId
 # ---- recognition ----------------------------------------------------------------------------------------------------------
 _HUMAN = re.compile(r"\b(human|real person|live (agent|person)|(customer )?support (team|agent|person)|speak (to|with) (someone|a person|support|"
                     r"customer support|customer service|an agent|a human)|talk (to|with) (someone|a person|support|customer support|customer service|"
-                    r"an agent|a human)|(need|want|get) (customer )?(support|help from (a|an) (person|human|agent))|escalat|(open|raise|create) a ticket)|மனித உதவி|மனிதர்|வாடிக்கையாளர் சேவை|ஊழியர்|இன்சான்|"
+                    r"an agent|a human)|(need|want|get) (customer )?(support|help from (a|an) (person|human|agent))|escalat|(open|raise|create) a ticket|"
+                    r"human support|human help|customer care (venum|vendum|chahiye))|மனித உதவி|மனிதர்|வாடிக்கையாளர் சேவை|ஊழியர்|இன்சான்|"
+                    r"ஹியூமன்|ஹ்யூமன்|கஸ்டமர் கேர்|கஸ்டமர் சப்போர்ட்|ஏஜென்ட்|ह्यूमन|ह्युमन|कस्टमर केयर|"
                     r"इंसान|मानव सहायता|किसी व्यक्ति|ग्राहक सेवा|सपोर्ट (से|टीम)|कर्मचारी से", re.I)
 # "பணத்தைத் திருப்பித் தர" (give the money back) is a refund, although "திருப்பித் தர" alone is a return.
 _REFUND = re.compile(r"\b(refund|money back|reimburse)|பணம் திரும்ப|பணத்தைத் திரும்ப|பணத்தை திரும்ப|பணத்தைத் திருப்பி|பணத்தை திருப்பி"
@@ -33,15 +35,21 @@ _REFUND = re.compile(r"\b(refund|money back|reimburse)|பணம் திரு
 _RETURN = re.compile(r"\b(return (it|this|that|my|the|an?|item|order|product)|send (it |this )?back|want to return|return request)|"
                      r"திருப்பி அனுப்ப|திருப்பித் தர|ரிட்டர்ன்|वापस करना|वापस करनी|लौटाना|रिटर्न", re.I)
 _COMPLAINT = re.compile(r"\b(damaged|broken|cracked|defective|wrong (item|product|size|colou?r)|missing|poor quality|bad quality|"
-                        r"complain|complaint|arrived (late|damaged|broken)|not as described)|சேதம|உடைந்த|தவறான பொருள்|தவறான|காணவில்லை|"
+                        r"complain|complaint|arrived (late|damaged|broken)|not as described|"
+                        r"report (a|an|the) (problem|issue)|(have|got|there is|there's) (a|an) (problem|issue) with (my|the|this|an?) "
+                        r"(order|item|product|delivery)|problem (irukku|iruku|aagudhu)|complaint (pannanum|kudukkanum|kodukkanum|venum))|"
+                        r"பிரச்சினையைப் புகார|பிரச்சினை உள்ளது|பிரச்சனை இருக்கு|समस्या (बतानी|दर्ज|की शिकायत)|समस्या है|"
+                        r"கம்ப்ளைன்ட்|கம்ப்ளெயின்ட்|கம்ப்ளைண்ட்|कंप्लेंट|कम्प्लेंट|சேதம|உடைந்த|தவறான பொருள்|தவறான|காணவில்லை|"
                         r"புகார்|தரம் (சரியில்லை|மோசம்)|टूटा|टूटी|खराब|ख़राब|गलत सामान|ग़लत|गलत|गायब|शिकायत|क्वालिटी|गुणवत्ता", re.I)
 _STATUS_WORD = re.compile(r"\b(status|update|progress|track|where is|what happened|any news)\b|நிலை|என்ன ஆனது|ஸ்டேட்டஸ்|"
                           r"स्थिति|स्टेटस|क्या हुआ|कहाँ तक", re.I)
 _REQUEST_WORD = re.compile(r"\b(complaint|return request|return|refund|request|ticket|escalation|human help)\b|புகார்|"
                            r"கோரிக்கை|ரீஃபண்ட்|திருப்பி|शिकायत|अनुरोध|रिफंड|रिफ़ंड|वापसी", re.I)
 # A question ABOUT the rules ("what is the return policy?") is answered from the policy, not turned into a request.
-_POLICY = re.compile(r"\b(polic(y|ies)|how many days|return window|rules?|allowed to|how (do|can) (i|we)|how to)\b|கொள்கை|விதி|எப்படி|"
-                     r"पॉलिसी|नीति|नियम|कैसे", re.I)
+# "What do I have to do to return it?" ("ரிட்டர்ன் பண்ண என்ன செய்யணும்?", "return panna enna seiyanum?") is also a how-to question.
+_POLICY = re.compile(r"\b(polic(y|ies)|how many days|return window|rules?|allowed to|how (do|can) (i|we)|how to|what (do|should) i do|"
+                     r"enna (seiyanum|seyyanum|pannanum|panna)|kya karna|kaise karu?n?)\b|கொள்கை|விதி|எப்படி|என்ன செய்ய|என்ன பண்ண|"
+                     r"पॉलिसी|नीति|नियम|कैसे|क्या करना", re.I)
 # "Did my refund come through?" — a status question (falls back to the payment-record answer if there's no request).
 _REFUND_STATUS = re.compile(r"come through|came through|been refunded|received (my|the|a) refund|got (my|the|a) refund|"
                             r"வரவில்லை|கிடைக்கவில்லை|नहीं मिला|मिला नहीं|आया नहीं|नहीं आया", re.I)
@@ -163,7 +171,7 @@ T = {
     "staff": {"en": "Staff accounts can't submit customer requests.", "ta": "ஊழியர் கணக்குகளால் வாடிக்கையாளர் கோரிக்கைகளைச் சமர்ப்பிக்க முடியாது.",
               "hi": "स्टाफ़ अकाउंट से ग्राहक अनुरोध नहीं भेजे जा सकते।"},
     "start": {"en": "I can register a {kind} for you.", "ta": "உங்களுக்காக ஒரு {kind} பதிவு செய்ய முடியும்.", "hi": "मैं आपके लिए {kind} दर्ज कर सकता हूँ।"},
-    "ask_order": {"en": "Which order is it about? {list}", "ta": "இது எந்த ஆர்டரைப் பற்றியது? {list}", "hi": "यह किस ऑर्डर के बारे में है? {list}"},
+    "ask_order": {"en": "Which order is it about? {list}.", "ta": "இது எந்த ஆர்டரைப் பற்றியது? {list}.", "hi": "यह किस ऑर्डर के बारे में है? {list}।"},
     "ask_order_optional": {"en": " Or say “no order” if it isn't about an order.", "ta": " ஆர்டர் தொடர்பானது இல்லையென்றால் “இல்லை” என்று சொல்லுங்கள்.",
                            "hi": " अगर यह किसी ऑर्डर के बारे में नहीं है तो “नहीं” कहें।"},
     "no_orders": {"en": "You don't have any orders yet.", "ta": "உங்களிடம் இன்னும் ஆர்டர்கள் இல்லை.", "hi": "आपके अभी कोई ऑर्डर नहीं हैं।"},
@@ -290,6 +298,10 @@ class CareFlow:
             else:
                 starting = False
         kind_name = KIND_NAMES[draft["kind"]][lang]
+        if principal is None and not starting and not found:
+            # A signed-out customer with a request waiting for sign-in asked something else ("Trailhead 55L Backpack",
+            # "what are your hours?"): answer that normally and keep the request for after sign-in.
+            return None
         if principal is None:
             text = t(lang, "signin", kind=kind_name)
             if draft["kind"] == "escalation":

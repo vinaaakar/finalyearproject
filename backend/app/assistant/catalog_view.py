@@ -46,6 +46,14 @@ class CatalogView:
                 if r["price_cents"] is not None and (max_price_cents is None or r["price_cents"] <= max_price_cents)]
         return sorted(rows, key=lambda r: (-r["price_cents"], r["name"]))[:limit]
 
+    def catalogue(self, store: StoreId, max_price_cents: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """This store's whole range (selling prices), grouped by category and cheapest first; with a budget, only the
+        products priced within it (an unpriced product is never presented as affordable)."""
+        rows = self._loc(store, repo.list_products(store, limit=limit))
+        if max_price_cents is not None:
+            rows = [r for r in rows if r["price_cents"] is not None and r["price_cents"] <= max_price_cents]
+        return sorted(rows, key=lambda r: (r["category"], r["price_cents"] is None, r["price_cents"] or 0, r["name"]))
+
     def in_category(self, store: StoreId, category: str, limit: int = 500) -> list[dict[str, Any]]:
         return self._loc(store, repo.list_products(store, category=category, limit=limit))
 

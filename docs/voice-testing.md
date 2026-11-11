@@ -134,3 +134,53 @@ Run: `cd frontend && npm run test:e2e:voice`; backend voice tests with `AVC_TEST
 ### Manual checklist still required (not verified)
 Physical microphone (§2) in a quiet room, with background noise, at 1–2 m, with a headset; native Tamil and Hindi
 speakers saying the four-turn scenario in their own words; review of every Tamil/Hindi reply text by native speakers.
+
+## 8. Multilingual voice-commerce pass (2026-11-11)
+
+### What changed and why (root causes found by running the sample phrases through `/chat`)
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| Tanglish ("Enakku order status theriyanum", "Return panna enna seiyanum?") answered in **English** | The language check counted shared nouns (order, status, return, price…) as English evidence, and the Tanglish vocabulary was tiny | Shared shopping nouns are no longer English evidence; Tanglish function words / verb forms added (`assistant/language.py`) |
+| "நான் என்னுடைய ஆர்டரை எப்போது பெறுவேன்?" → general introduction | The keyword "ஆர்டர்" never matches the inflected "ஆர்டரை" | Tamil stem "ஆர்டர" (matches every case ending) plus reusable Tanglish / spoken-Tamil order-question rules (`intent.py`) |
+| "What are the products you are selling right now?" → off-topic / support e-mail | No "whole catalogue" intent; generic words were searched as product names | Catalogue intent: every product of THIS store, grouped by category, price and stock; with a budget, in-stock items within it |
+| "3000 roobaikku kulla backpack venum" showed a ₹6,499 pack | "roobaikku" was not a currency | Tanglish/Hinglish rupee spellings and "kulla" |
+| "When will I receive SA-…?" repeated the status | Orders only get a date when staff ship them; the reply never said so | Delivery questions get a plain answer: not shipped yet / no estimated date provided / the date on record — never invented |
+| "What about my other order?", "only my second order" → generic / e-mail fallback | No order-reference resolution | "other" = the order not just discussed; ordinals = the list just shown, else date placed (stated); ambiguous → asks |
+| Empty cart right after "add …" | Correct (a proposal is not an addition) but unexplained | The cart answer says the proposed item hasn't been added yet; "yes" / "ஆம்" / "हाँ" confirms ONE pending cart change like the button |
+| "I want to report a problem." → off-topic | Phrase not recognised | Recognised in English, Tamil script and Tanglish |
+| Reply shown but not heard | Safari: AudioContext created after the permission prompt; autoplay rejections and synthesis errors were swallowed and reported as "no voice"; the read-aloud preference was written as "off" on every page load | Context created inside the tap; audio unlocked on the first tap; errors surfaced (`blocked` / `failed`) with a 🔊 replay; long replies split into sentences; a new preference key written only when changed |
+| Tanglish speech transcribed as unrelated English | whisper's language ID often calls code-switched speech "English" with moderate confidence | Weak English (p < 0.85) inside a Tamil/Hindi conversation is transcribed in the conversation language (`CODE_SWITCH_EN_MAX`); confident English is unchanged |
+
+The local architecture is unchanged: whisper.cpp + Ollama + macOS `say`; no cloud service, no new model download.
+Latency is now reported separately: `/speech/transcribe` → `elapsed_ms` and `audio_seconds`; `/speech/synthesize` →
+`X-Elapsed-Ms`; `/chat` → `timing.total_ms` and `timing.llm_ms` (only when Ollama was called). All three are also logged.
+
+### Automated (no hardware)
+
+- `backend/tests/test_voice_intelligence.py`: Tanglish / colloquial Tamil-script / Hindi language identification; intent
+  routing for catalogue, budgets, delivery questions, order references, cart quantities, care requests; end-to-end chat on
+  both stores (catalogue completeness and isolation, budgets, delivery-date honesty with and without a date on record,
+  other/second/ambiguous order references, cart proposals vs. real cart state, escalation recorded only after "yes" and
+  visible to customer and staff, language switching); transcription hint with a fake whisper binary; TTS empty-output refusal.
+- `frontend/.../ChatVoice.test.jsx` and `voice.test.js`: "yes" confirms exactly one pending cart change (never a cancellation),
+  read-aloud on/off/auto, blocked and failed playback surfaced, replay, recorder `no-audio`, Safari context order, hint.
+- Real Chromium (headless) with a fake microphone stream and a fake whisper binary: 4.5 s recorded, uploaded as 16 kHz WAV
+  with `hint=ta`, transcribed in Tamil after a weak "English" detection, answered in Tamil; with no voice installed the
+  page said so instead of claiming it spoke.
+
+### Not verified here (needs a person and the real models)
+
+1. **Real microphone + real whisper.cpp model** — not run (no model in this environment; none downloaded).
+2. **Real speaker playback** in Safari and Chrome on the Mac (Vani / Lekha / Rishi voices).
+3. **Native-speaker review** of the new Tamil and Hindi reply templates and of Tanglish coverage.
+4. Whether `CODE_SWITCH_EN_MAX = 0.85` suits real Tanglish speakers (measure with `scripts/voice_eval.py` recordings).
+
+### Manual steps (Mac)
+
+1. `scripts/start.sh` with `SPEECH_STT=whisper_cpp` (multilingual `ggml-base.bin`) and `SPEECH_TTS=macos_say`.
+2. Store A (http://127.0.0.1:5180), chat, 🎤, say each Tanglish sample; check the transcript, that the reply is Tamil, and
+   that it is heard. Repeat on Safari. Turn "Read replies aloud" off: nothing must play. Tap 🔊 on a reply: it must play.
+3. Signed in as a customer with two orders: "Ennoda order eppo varum?", "What about my other order?", "my second order".
+4. "Add the Trailhead 55L Backpack", ask the cart total (must say not added yet), say "ஆம்", ask again (must include it).
+5. Repeat 2–4 on Store B (http://127.0.0.1:5181) with coffee/tea items; Maple must never mention Scout's products.

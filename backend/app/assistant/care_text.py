@@ -599,6 +599,113 @@ CARE: dict[str, dict[str, str]] = {
     "btn_checkout": {"ta": "செக்அவுட்", "en": "Go to checkout", "hi": "चेकआउट करें"},
     "btn_orders": {"ta": "என் ஆர்டர்கள்", "en": "My orders", "hi": "मेरे ऑर्डर"},
     "btn_email": {"ta": "{email}-க்கு மின்னஞ்சல்", "en": "Email {email}", "hi": "{email} पर ईमेल करें"},
+    # ---- catalogue discovery, delivery dates, order references, cart state (voice-intelligence pass) ----------------
+    "catalogue_intro": {
+        "ta": "{store}-இல் இப்போது விற்பனையில் உள்ளவை: ",
+        "en": "Here's what {store} sells right now: ",
+        "hi": "{store} में अभी ये बिकते हैं: ",
+    },
+    "catalogue_intro_budget": {
+        "ta": "{store}-இல் {budget}-க்குள் உள்ளவை: ",
+        "en": "Everything at {store} within {budget}: ",
+        "hi": "{store} में {budget} के अंदर ये हैं: ",
+    },
+    "catalogue_none_budget": {
+        "ta": "{store}-இல் {budget}-க்குள் எந்தப் பொருளும் இல்லை. எங்களின் குறைந்த விலைப் பொருள் {name} — {price}.",
+        "en": "Nothing at {store} is priced within {budget}. Our lowest-priced item is the {name} at {price}.",
+        "hi": "{store} में {budget} के अंदर कोई प्रोडक्ट नहीं है। हमारा सबसे कम कीमत वाला प्रोडक्ट {name} है — {price}।",
+    },
+    "catalogue_follow": {
+        "ta": "இவற்றில் எதைப் பற்றியும் கேளுங்கள், அல்லது கார்ட்டில் சேர்க்கச் சொல்லுங்கள்.",
+        "en": "Ask me about any of them, or tell me which one to add to your cart.",
+        "hi": "इनमें से किसी के बारे में पूछिए, या बताइए कि कौन-सा कार्ट में जोड़ना है।",
+    },
+    "closest_over_budget": {
+        "ta": "பொருந்தும் பொருட்களில் குறைந்த விலை: {list}.",
+        "en": "The lowest-priced match is {list}.",
+        "hi": "मेल खाने वाले प्रोडक्ट में सबसे कम कीमत: {list}।",
+    },
+    "order_not_shipped": {
+        "ta": " இது இன்னும் அனுப்பப்படவில்லை, மதிப்பிடப்பட்ட டெலிவரி தேதி இன்னும் வழங்கப்படவில்லை.",
+        "en": " It hasn't shipped yet, and no estimated delivery date has been provided yet.",
+        "hi": " यह अभी शिप नहीं हुआ है, और अनुमानित डिलीवरी तारीख अभी नहीं दी गई है।",
+    },
+    "order_not_shipped_eta": {
+        "ta": " இது இன்னும் அனுப்பப்படவில்லை.",
+        "en": " It hasn't shipped yet.",
+        "hi": " यह अभी शिप नहीं हुआ है।",
+    },
+    "order_unpaid_note": {
+        "ta": " பணம் செலுத்தப்படும் வரை இது அனுப்பப்படாது, எனவே டெலிவரி தேதி எதுவும் இல்லை.",
+        "en": " It won't ship until payment is complete, so there is no delivery date yet.",
+        "hi": " भुगतान पूरा होने तक यह शिप नहीं होगा, इसलिए अभी कोई डिलीवरी तारीख नहीं है।",
+    },
+    "order_no_eta": {
+        "ta": " மதிப்பிடப்பட்ட டெலிவரி தேதி வழங்கப்படவில்லை.",
+        "en": " No estimated delivery date has been provided.",
+        "hi": " अनुमानित डिलीवरी तारीख नहीं दी गई है।",
+    },
+    "order_cancelled_note": {
+        "ta": " இது ரத்து செய்யப்பட்டது, எனவே டெலிவரி செய்யப்படாது.",
+        "en": " It was cancelled, so it won't be delivered.",
+        "hi": " यह रद्द हो चुका है, इसलिए डिलीवर नहीं होगा।",
+    },
+    "order_pick": {
+        "ta": "உங்களிடம் {n} ஆர்டர்கள் உள்ளன. குறிப்பிட்ட ஒன்றைப் பற்றி அறிய அதன் ஆர்டர் எண்ணைச் சொல்லுங்கள்.",
+        "en": "You have {n} orders. Tell me the order number if you'd like details about one of them.",
+        "hi": "आपके {n} ऑर्डर हैं। किसी एक के बारे में जानना हो तो उसका ऑर्डर नंबर बताइए।",
+    },
+    "order_ref_which": {
+        "ta": "எந்த ஆர்டர் என்று உறுதியாகத் தெரியவில்லை. உங்கள் ஆர்டர்கள்: {list}. எதைப் பற்றி அறிய வேண்டும்?",
+        "en": "I'm not sure which order you mean. Your orders are: {list}. Which one would you like to know about?",
+        "hi": "मुझे पक्का नहीं पता कि आप किस ऑर्डर की बात कर रहे हैं। आपके ऑर्डर: {list}। किसके बारे में जानना है?",
+    },
+    "order_ref_none": {
+        "ta": "உங்கள் கணக்கில் வேறு ஆர்டர் எதுவும் இல்லை.",
+        "en": "There's no other order on your account.",
+        "hi": "आपके अकाउंट में कोई दूसरा ऑर्डर नहीं है।",
+    },
+    "order_ref_placed": {
+        "ta": "(ஆர்டர் செய்த தேதிப்படி இது உங்கள் {n}-ஆவது ஆர்டர்; {date} அன்று செய்யப்பட்டது.)",
+        "en": "(Counting by the date you placed them, this is your order no. {n}, placed on {date}.)",
+        "hi": "(ऑर्डर रखने की तारीख़ के हिसाब से यह आपका {n}वाँ ऑर्डर है, जो {date} को रखा गया था।)",
+    },
+    "cart_pending_add": {
+        "ta": " {name} இன்னும் சேர்க்கப்படவில்லை — சேர்க்க “{button}” பொத்தானைத் தட்டுங்கள் அல்லது “ஆம்” என்று சொல்லுங்கள்.",
+        "en": " The {name} hasn't been added yet — tap “{button}” or say “yes” to add it.",
+        "hi": " {name} अभी जोड़ा नहीं गया है — जोड़ने के लिए “{button}” दबाएँ या “हाँ” कहें।",
+    },
+    "qty_confirm": {
+        "ta": "உங்கள் கார்ட்டில் {name} {old} உள்ளது. அதை {qty} ஆக மாற்ற “{button}” பொத்தானைத் தட்டுங்கள்.",
+        "en": "Your cart has {old} × {name}. Tap “{button}” to change it to {qty}.",
+        "hi": "आपके कार्ट में {name} {old} है। इसे {qty} करने के लिए “{button}” दबाएँ।",
+    },
+    "qty_same": {
+        "ta": "உங்கள் கார்ட்டில் ஏற்கனவே {name} {qty} உள்ளது.",
+        "en": "Your cart already has {qty} × {name}.",
+        "hi": "आपके कार्ट में पहले से {name} {qty} है।",
+    },
+    "qty_limit": {
+        "ta": "{name}-ஐ அதிகபட்சம் {max} வரை மட்டுமே வாங்க முடியும் (ஸ்டாக்: {stock}).",
+        "en": "You can have at most {max} × {name} (stock: {stock}).",
+        "hi": "{name} अधिकतम {max} तक ही लिया जा सकता है (स्टॉक: {stock})।",
+    },
+    "order_help_offer": {
+        "ta": "இந்த ஆர்டரில் பிரச்சினை இருந்தால், புகார் பதிவு செய்யலாம் அல்லது எங்கள் குழுவின் உதவியைக் கேட்கலாம்.",
+        "en": "If something is wrong with this order, I can record a complaint or a request for our team to help.",
+        "hi": "अगर इस ऑर्डर में कोई समस्या है, तो मैं शिकायत या हमारी टीम के लिए मदद का अनुरोध दर्ज कर सकता हूँ।",
+    },
+    "qty_which": {
+        "ta": "எந்தப் பொருளின் எண்ணிக்கையை மாற்ற வேண்டும்? உங்கள் கார்ட்டில்: {list}.",
+        "en": "Which item's quantity should I change? Your cart has: {list}.",
+        "hi": "किस सामान की मात्रा बदलनी है? आपके कार्ट में: {list}।",
+    },
+    "btn_qty": {"ta": "{name}: {qty} ஆக மாற்று", "en": "Change {name} to {qty}", "hi": "{name}: {qty} करें"},
+    "lang_switched": {
+        "ta": "சரி, இனி தமிழில் பேசுகிறேன். நான் எப்படி உதவலாம்?",
+        "en": "Sure — I'll continue in English. How can I help?",
+        "hi": "ठीक है, अब मैं हिंदी में बात करूँगा। मैं कैसे मदद करूँ?",
+    },
 }
 
 # What each assistant specialises in (used when steering back from an unrelated question).

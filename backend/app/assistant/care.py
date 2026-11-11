@@ -132,7 +132,7 @@ class CareDesk:
                     out.actions.append(email_action)  # the reply sends the customer to the team: give them the button
 
         # ---- products: compare, cheaper, alternatives, add to cart, care tips ---------------------------
-        if intents & {"compare", "cheaper", "alternative", "add_to_cart", "remove_from_cart", "attribute", "care"}:
+        if intents & {"compare", "cheaper", "alternative", "add_to_cart", "remove_from_cart", "set_quantity", "attribute", "care"}:
             self._product_care(store, intent, ctx, principal, owner, lang, history, out, email)
 
         # ---- accounts, checkout, store information -----------------------------------------------------
@@ -616,6 +616,39 @@ class CareDesk:
                     label = i18n.t(lang, "btn_remove", name=item["name"])
                     out.body.append(i18n.t(lang, "remove_confirm", name=item["name"], qty=item["quantity"], button=label))
                     out.actions.append({"type": "remove_from_cart", "slug": item["slug"], "name": item["name"], "label": label})
+
+        if "set_quantity" in intents and intent.set_quantity is not None:
+            # "Make it 2" / "change the quantity to 3": a proposed change the customer confirms (the cart API applies it).
+            out.skip |= {"products", "cart"}
+            items = commerce.get_cart(store, owner)["items"] if owner is not None and (owner.customer_id or owner.guest_hash) else []
+            if principal is not None and principal.role == "agent":
+                out.body.append(i18n.t(lang, "add_staff"))
+            elif not items:
+                out.body.append(i18n.t(lang, "cart_empty"))
+            else:
+                in_cart = {i["slug"]: i for i in items}
+                named = [p for p in top if p["slug"] in in_cart] if top else []
+                discussed = [p for p in hist if p["slug"] in in_cart]
+                pick = (named[0]["slug"] if len(named) == 1 else None) or (discussed[0]["slug"] if len(discussed) == 1 and not named else None) \
+                    or (items[0]["slug"] if len(items) == 1 else None)
+                if pick is None:
+                    out.body.append(i18n.t(lang, "qty_which", list=", ".join(f"{i['quantity']} × {i['name']}" for i in items[:5])))
+                else:
+                    item, qty = in_cart[pick], intent.set_quantity
+                    most = max(0, min(MAX_LINE_QTY, item["stock_qty"]))
+                    if qty == 0:
+                        label = i18n.t(lang, "btn_remove", name=item["name"])
+                        out.body.append(i18n.t(lang, "remove_confirm", name=item["name"], qty=item["quantity"], button=label))
+                        out.actions.append({"type": "remove_from_cart", "slug": item["slug"], "name": item["name"], "label": label})
+                    elif qty > most:
+                        out.body.append(i18n.t(lang, "qty_limit", name=item["name"], max=most, stock=item["stock_qty"]))
+                    elif qty == item["quantity"]:
+                        out.body.append(i18n.t(lang, "qty_same", name=item["name"], qty=qty))
+                    else:
+                        label = i18n.t(lang, "btn_qty", name=item["name"], qty=qty)
+                        out.body.append(i18n.t(lang, "qty_confirm", name=item["name"], old=item["quantity"], qty=qty, button=label))
+                        out.actions.append({"type": "set_cart_quantity", "slug": item["slug"], "name": item["name"], "quantity": qty,
+                                            "label": label})
 
         if "care" in intents:
             out.skip.add("products")

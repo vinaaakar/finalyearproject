@@ -45,17 +45,29 @@ _OTHER_INDIC = re.compile(r"[\u0980-\u0B7F\u0C00-\u0DFF]")
 _IDENTIFIER = re.compile(r"\b[A-Za-z]{2}-?\d{3,}\b|\$\s?\d[\d,.]*|\b\d[\d,.:/-]*\b|\b[0-9A-Z]{8,}\b")
 
 ROMANIZED = {
+    # Tanglish: Tamil written in Latin letters, usually mixed with English nouns ("Ennoda order enga irukku?",
+    # "Cart la irukkura products sollunga"). Function words, pronouns, case endings and verb forms only — never
+    # product or shopping nouns, which are shared with English.
     "ta": set("""enga enge engey enna ennoda en naan nan neenga unga ungal ungalidam irukku irukka irukkaa irukkiratha
         irukkudha iruka venum vendum venam evvalavu evlo eppo eppadi epdi sollunga sollu illa illai irukum
-        kidaikkuma kidaikum anuppunga vanakkam nandri romba konjam paarunga theriyuma theriyum aachu ennachu""".split()),
+        kidaikkuma kidaikum anuppunga vanakkam nandri romba konjam paarunga theriyuma theriyum aachu ennachu
+        enakku enaku ennudaya ennudaiya ungaloda indha intha andha antha idha itha adha atha idhu ithu adhu athu
+        oda la kulla ulla kitta kitte thaan dhaan irukkura irukura iruku irukkuma varum varuma varala vandhuchu
+        vanthuchu vandhucha vanthucha aagum aguma aacha aachaa achu pannunga pannu panni pannanum pannalama
+        pannalaam pannidunga solla theriyanum therinjukanum seiyanum seyyanum seiyalama seiyanumnu epo yen yaar
+        roobai roobaikku rubai rubaikku rupai kudunga kodunga podunga podu sethu serthu serunga paakanum paarkanum
+        paathu mudiyuma mudiyum vaanganum vanganum vaangalam nalla eduthudunga edunga""".split()),
     "hi": set("""kya kyaa hai hain mera meri mere mujhe aap aapke aapka kahan kahaan kab kitna kitne kitni chahiye
         nahi nahin karna kaise kaisa batao bataiye hoga milega bhej bhejo namaste dhanyavad shukriya tak abhi
-        wala wali kripya mein aur ke ki ka ko se""".split()),
+        wala wali kripya mein aur ke ki ka ko se aayega aaega hua huaa wapas vapas karo kariye dikhao dikhaiye
+        chahie kaun kaunsa sabse sasta mujhko kidhar""".split()),
 }
 # Common English function words: evidence that Latin text is English rather than romanized Tamil/Hindi.
+# Shopping nouns that Tanglish and Hinglish borrow from English ("order", "status", "price", "return", "delivery") are
+# deliberately NOT here: "Enakku order status theriyanum" is Tamil with English nouns, not English.
 _ENGLISH = set("""the a an is are was do does did you your my me i we can could would will what where when how which
-    have has any some please order status return policy shipping much price stock in on for to of and or
-    with this that it there here want need looking get buy tell show""".split())
+    have has any some please much in on for to of and or with this that it there here want need looking get
+    tell show""".split())
 
 
 @dataclass(frozen=True)

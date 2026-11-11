@@ -41,6 +41,11 @@ LANGUAGE_PROMPTS = {
     "ta": "என் ஆர்டர் எங்கே? இது ஸ்டாக்கில் உள்ளதா? ஷிப்பிங் கட்டணம் எவ்வளவு? திருப்பி அனுப்பலாமா?",
     "hi": "मेरा ऑर्डर कहाँ है? क्या यह स्टॉक में है? शिपिंग कितनी है? क्या मैं इसे वापस कर सकता हूँ?",
 }
+# Tanglish / Hinglish (Tamil or Hindi with many English nouns) is often auto-detected as English with only moderate
+# confidence. Transcribing it with the English model turns "Ennoda order enga irukku" into unrelated English words, so a
+# NOT-confident English detection inside a Tamil or Hindi conversation is transcribed in the conversation language.
+# Clearly English speech (p >= this) is still transcribed as English.
+CODE_SWITCH_EN_MAX = 0.85
 _DETECTED_RE = re.compile(r"auto-detected language: ([a-z]{2,3}) \(p = ([0-9.]+)\)")
 
 
@@ -51,6 +56,7 @@ class Transcript:
     detected_language: str | None     # what auto-detection reported, after aliases (None if not run)
     language_probability: float | None
     uncertain: bool                   # detection was weak or found an unsupported language
+    hinted: bool = False              # transcribed in the conversation language instead of a weak "English" detection
 
 
 class SpeechError(Exception):
@@ -178,7 +184,10 @@ class WhisperCppSTT:
             return detected, False
         return "auto", True
 
-    def recognize(self, audio: bytes, mime_type: str, language: str | None = "auto", english_prompt: str | None = None) -> Transcript:
+    def recognize(self, audio: bytes, mime_type: str, language: str | None = "auto", english_prompt: str | None = None,
+                  hint: str | None = None) -> Transcript:
+        """`hint` is the conversation's current language (never treated as detection evidence: the receipt still carries
+        what whisper detected). It only decides how a weak English detection is transcribed (CODE_SWITCH_EN_MAX)."""
         if not self.available:
             raise SpeechError("Server speech recognition is not available.")
         if mime_type not in ("audio/wav", "audio/x-wav", "audio/wave"):
@@ -196,7 +205,7 @@ class WhisperCppSTT:
             path = Path(tmp) / "input.wav"
             path.write_bytes(audio)
             os.chmod(path, 0o600)
-            detected, probability = None, None
+            detected, probability, hinted = None, None, False
             if language not in (None, "auto"):
                 lang, uncertain = language, False                     # explicit override (not detection)
             elif self.detect and len(self.languages) > 1:
@@ -204,6 +213,9 @@ class WhisperCppSTT:
                 aliased = raw not in self.languages and LANGUAGE_ALIASES.get(raw) in self.languages
                 detected = LANGUAGE_ALIASES[raw] if aliased else raw
                 lang, uncertain = self.choose_language(detected, probability)
+                if (detected == "en" and hint in self.languages and hint != "en" and not uncertain
+                        and (probability or 0) < CODE_SWITCH_EN_MAX):
+                    lang, hinted = hint, True
                 if aliased and (probability or 0) < 0.75:
                     # A weak "Urdu" is as likely to be a misheard Tamil clip as Hindi (observed): don't map it.
                     detected, lang, uncertain = raw, "auto", True
@@ -219,7 +231,7 @@ class WhisperCppSTT:
         # whisper emits markers like [BLANK_AUDIO] for silence.
         if text.startswith("[") and text.endswith("]"):
             text = ""
-        return Transcript(text, lang, detected, probability, uncertain)
+        return Transcript(text, lang, detected, probability, uncertain, hinted)
 
     def transcribe(self, audio: bytes, mime_type: str, language: str = "en", prompt: str | None = None) -> str:
         return self.recognize(audio, mime_type, language, english_prompt=prompt).text

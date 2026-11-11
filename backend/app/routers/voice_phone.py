@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+import logging
+import time
 from functools import partial
 from typing import Annotated
 
@@ -9,10 +12,11 @@ from fastapi.concurrency import run_in_threadpool
 from ..deps import StorePath, client_key, rate_limit
 from ..phone.simulator import SimulatorProvider
 from ..schemas import PhoneTurnRequest, SynthesizeRequest
-from ..speech.adapters import MAX_AUDIO_BYTES, SpeechError, capabilities
+from ..speech.adapters import MAX_AUDIO_BYTES, SpeechError, capabilities, wav_duration_seconds
 from ..assistant.language import speech_receipt
 from ..stores import ORDER_PREFIX
 
+log = logging.getLogger("app.speech")
 router = APIRouter(tags=["voice & phone"], dependencies=[Depends(rate_limit("default"))])
 simulator = SimulatorProvider()
 
@@ -27,7 +31,8 @@ def speech_capabilities(request: Request):
 
 @router.post("/api/stores/{store_id}/speech/transcribe", dependencies=[Depends(rate_limit("chat"))])
 async def transcribe(store_id: StorePath, request: Request,
-                     language: Annotated[str, Query(pattern=r"^(auto|ta|en|hi)$")] = "auto"):
+                     language: Annotated[str, Query(pattern=r"^(auto|ta|en|hi)$")] = "auto",
+                     hint: Annotated[str | None, Query(pattern=r"^(ta|en|hi)$")] = None):
     """Local speech-to-text. Body: a 16-bit PCM WAV recording (max 30 s). Audio is not stored or logged.
     language=auto identifies Tamil / English / Hindi (restricted to SPEECH_LANGUAGES) and falls back to the
     default language (Tamil unless configured otherwise) when unsure."""
@@ -46,9 +51,12 @@ async def transcribe(store_id: StorePath, request: Request,
     prefix = ORDER_PREFIX[store_id].rstrip("-")
     # Biases recognition toward this store's order-number format (e.g. "SA-10001").
     prompt = f"Order numbers look like {prefix}-10001: two letters, a dash, five digits."
+    started = time.perf_counter()
     try:
         if hasattr(stt, "recognize"):
-            t = await run_in_threadpool(stt.recognize, bytes(audio), mime, language, prompt)
+            # The conversation language only steers how a weak "English" detection of code-switched speech is transcribed.
+            extra = {"hint": hint} if hint and "hint" in inspect.signature(stt.recognize).parameters else {}
+            t = await run_in_threadpool(partial(stt.recognize, bytes(audio), mime, language, prompt, **extra))
             text, detected, prob, uncertain = t.text, t.detected_language, t.language_probability, t.uncertain
         else:
             text = await run_in_threadpool(stt.transcribe, bytes(audio), mime, "en" if language == "auto" else language, prompt)
@@ -57,8 +65,17 @@ async def transcribe(store_id: StorePath, request: Request,
         raise HTTPException(400, str(exc))
     # A signed receipt lets /chat use this server's acoustic language detection without trusting the client.
     receipt = speech_receipt(request.app.state.settings.secret_key, store_id.value, text, detected, prob) if detected and text else None
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    try:
+        seconds = wav_duration_seconds(bytes(audio))
+    except SpeechError:
+        seconds = None
+    log.info("speech transcribe store=%s audio_s=%s detected=%s p=%s hinted=%s elapsed_ms=%s", store_id.value,
+             None if seconds is None else round(seconds, 2), detected, prob, getattr(t, "hinted", False) if hasattr(stt, "recognize") else False,
+             elapsed_ms)
     return {"text": text, "detected_language": detected, "language_probability": prob, "uncertain": uncertain,
-            "speech_receipt": receipt, "engine": stt.name}
+            "speech_receipt": receipt, "engine": stt.name, "audio_seconds": None if seconds is None else round(seconds, 2),
+            "elapsed_ms": elapsed_ms}
 
 
 @router.post("/api/speech/synthesize", dependencies=[Depends(rate_limit("chat"))])
@@ -66,11 +83,17 @@ async def synthesize(body: SynthesizeRequest, request: Request):
     tts = request.app.state.tts
     if not tts.available:
         raise HTTPException(503, "Server text-to-speech is not configured.")
+    started = time.perf_counter()
     try:
         audio, mime = await run_in_threadpool(partial(tts.synthesize, body.text, language=body.language))
     except SpeechError as exc:
         raise HTTPException(400, str(exc))
-    return Response(content=audio, media_type=mime, headers={"Cache-Control": "no-store"})
+    if not audio:
+        # Never hand the browser an empty file it would "play" silently.
+        raise HTTPException(502, "Text-to-speech produced no audio.")
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    log.info("speech synthesize lang=%s chars=%s bytes=%s elapsed_ms=%s", body.language, len(body.text), len(audio), elapsed_ms)
+    return Response(content=audio, media_type=mime, headers={"Cache-Control": "no-store", "X-Elapsed-Ms": str(elapsed_ms)})
 
 
 def _simulator_enabled(request: Request) -> None:

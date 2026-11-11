@@ -16,13 +16,14 @@ ORDER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2})[-\s]?(\d{5})\b")
 # ---- budgets ("under $50", "below ₹5,000", "Rs. 5000 க்குள்", "5000 रुपये से कम") ---------------------------
 # The currency is kept, never assumed to be the catalogue's: comparing a rupee budget with dollar prices
 # would need an exchange rate, and the assistant must not invent one (see Assistant.gather).
-_INR = r"₹|\brs\b\.?|\binr\b|\brupees?\b|\brupaye\b|ரூபாய்|ரூ\.|रुपये|रुपए|रुपया|रु\."
+_INR = (r"₹|\brs\b\.?|\binr\b|\brupees?\b|\brupaye\b|\b(?:roo?bai|rubaai|rupai|rupee|ruba)(?:kku|ku|k)?\b|ரூபாய்|ரூ\.|"
+        r"रुपये|रुपए|रुपया|रु\.")
 _USD = r"\$|\busd\b|\bdollars?\b|டாலர்|डॉलर"
 _CUR = rf"(?:{_INR}|{_USD})"
 _AMOUNT = r"(?P<whole>\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(?P<frac>\d{1,2}))?(?P<k>\s*k\b)?"
 _EN_LIMIT = r"under|below|less than|cheaper than|max(?:imum)?|up to|at most|within|not more than|no more than|budget(?: is| of)?"
 _NATIVE_LIMIT = (r"க்குள்|க்குக்?\s*கீழ்|க்குக்?\s*குறைவா|से\s*कम|के\s*अंदर|के\s*भीतर|तक\s*का|तक\s*की|kulla|keezh|se\s*kam|"
-                 r"ke\s*andar")
+                 r"ke\s*andar|kulle|kulla|ulla")
 BUDGET_RE = re.compile(rf"\b(?:{_EN_LIMIT})\s*:?\s*(?P<pre>{_CUR})?\s*{_AMOUNT}\s*(?P<post>{_CUR})?", re.I)
 _NATIVE_BUDGET_RE = re.compile(rf"(?P<pre>{_CUR})?\s*{_AMOUNT}\s*(?P<post>{_CUR})?\s*-?\s*(?:{_NATIVE_LIMIT})", re.I)
 # An amount with an explicit currency and no limit word ("a backpack for ₹5000", "INR 5000 tent") is also a budget.
@@ -85,7 +86,8 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
 
 # Tamil, Hindi and romanized keywords for the same intents (merged into _KEYWORDS below).
 _KEYWORDS_I18N: dict[str, tuple[str, ...]] = {
-    "order_status": ("ஆர்டர்", "டிராக்", "பார்சல்", "எப்போது வரும்", "வந்து சேரும்", "ऑर्डर", "आर्डर", "और्डर", "ट्रैक", "पार्सल", "कब आएगा",
+    # "ஆர்டர" (no final virama) also matches the inflected forms ஆர்டரை / ஆர்டரின் / ஆர்டரில்.
+    "order_status": ("ஆர்டர", "டிராக்", "பார்சல்", "எப்போது வரும்", "வந்து சேரும்", "ऑर्डर", "आर्डर", "और्डर", "ट्रैक", "पार्सल", "कब आएगा",
                      "कब पहुँचेगा", "कब पहुंचेगा", "order enga", "order kahan", "kab aayega", "kab aaega"),
     "shipping": ("ஷிப்பிங்", "டெலிவரி", "அனுப்புவீர்கள்", "அனுப்ப எவ்வளவு", "शिपिंग", "डिलीवरी", "डिलिवरी", "भेजने"),
     "returns": ("ரிட்டர்ன்", "திருப்பி", "பணம் திரும்ப", "ரீஃபண்ட்", "रिटर्न", "वापस", "रिफ़ंड", "रिफंड", "लौटा", "wapas", "vapas", "thirupi"),
@@ -97,7 +99,8 @@ _KEYWORDS_I18N: dict[str, tuple[str, ...]] = {
               "kitne", "kimat", "keemat", "daam"),
     "product": ("பரிந்துரை", "வேண்டும்", "தேவை", "காட்டுங்கள்", "பற்றி சொல்", "सुझाव", "चाहिए", "दिखाओ", "दिखाइए", "के बारे में", "venum",
                 "vendum", "chahiye"),
-    "cart": ("கார்ட்", "கூடையில்", "कार्ट", "टोकरी"),
+    "cart": ("கார்ட்", "கூடையில்", "कार्ट", "टोकरी", " cart la", " cart-la", " cartla", " cart le ", " cart il", " cart mein",
+             " cart me ", " cart-ல", " cart ல", "cart total", "cart summary"),
     "contact": ("தொடர்பு", "மனிதர்", "ஏஜென்ட்", "பிரதிநிதி", "संपर्क", "एजेंट", "इंसान", "प्रतिनिधि"),
     "greeting": ("வணக்கம்", "नमस्ते", "नमस्कार", "vanakkam", "namaste"),
 }
@@ -214,7 +217,8 @@ CARE_KEYWORDS: dict[str, tuple[str, ...]] = {
                       "செக்அவுட்", "ஆர்டர் செய்வது எப்படி", "வாங்குவது எப்படி", "चेकआउट", "ऑर्डर कैसे करें", "कैसे खरीद"),
     "compare": ("compare", "comparison", "difference between", "differences between", "vs", "versus", "which is better",
                 "which one is better", "which one should i", "which should i",
-                "ஒப்பிட", "வித்தியாசம்", "எது சிறந்தது", "तुलना", "फ़र्क", "फर्क", "अंतर", "कौन सा बेहतर", "कौन-सा बेहतर"),
+                "ஒப்பிட", "வித்தியாசம்", "எது சிறந்தது", "கம்பேர்", "तुलना", "फ़र्क", "फर्क", "अंतर",
+                "कौन सा बेहतर", "कौन-सा बेहतर", "कंपेयर", "compare pannunga", "compare panni"),
     "cheaper": ("cheaper", "less expensive", "lower price", "more affordable", "budget option", "cheapest",
                 "lowest-priced", "lowest priced", "lowest-price", "lowest price", "least expensive",
                 "மலிவான", "குறைந்த விலை", "सस्ता", "सस्ती", "कम कीमत", "kam daam"),
@@ -269,7 +273,10 @@ CARE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "add_to_cart": ("add to cart", "add to my cart", "add it", "add this", "add that", "add one", "add two", "add the", "put it in",
                     "put in my cart", "i'll take", "i will take", "i want to buy", "i'd like to buy", "buy it", "buy this", "buy the",
                     "கார்ட்டில் சேர்", "சேர்க்கவும்", "சேர்த்து விடு", "வாங்க வேண்டும்", "कार्ट में डाल", "कार्ट में जोड़", "जोड़ दो",
-                    "जोड़ें", "खरीदना है", "add kar"),
+                    "जोड़ें", "खरीदना है", "add kar",
+                    # Tanglish / spoken Tamil with an English verb: "Indha product add pannunga", "cart la podunga"
+                    "add pannunga", "add pannu", "add panni", "add pannidunga", "add pannalaam", "add pannalama", "cart la podunga",
+                    "cart la podu", "cart la sethu", "cart la serthu", "ஆட் பண்ணுங்க", "ஆட் பண்ணு", "ஆட் செய்"),
 }
 _WEBSITE_WORDS = ("website", "site", "page", "button", "app", "browser", "screen", "checkout page", "search box")
 _DIGIT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -310,6 +317,7 @@ def sensitive_kind(text: str) -> str | None:
 # Words that point back at something already discussed ("when will IT arrive?", "இந்த ஆர்டர்", "यह ऑर्डर").
 _REFERS_BACK_RE = re.compile(r"(?<![a-z])(it|its|it's|this|that|these|those|same|them|the order|that one|this one|"
                              r"the best one|which one|the cheapest one|the first one|the second one|one of them)(?![a-z])"
+                             r"|(?<![a-z])(indha|intha|andha|antha|idha|itha|idhu|ithu|adha|atha|adhu|athu)(?![a-z])"
                              r"|இந்த|அந்த|இது|அது|இதி|இதன|இதை|இதோ|அதி|அதன|அதை|அதோ|இவற்றி|அவற்றி"
                              r"|यह|इसका|इसे|इसकी|इसके|इसमें|इसको|वह|वो|उसका|उसे|उसकी|उसके|उसमें|इनमें|इनका")
 # Questions about a property the catalogue may not record (Phase H+: answered from the description, never invented).
@@ -329,6 +337,8 @@ def attribute_asked(text: str) -> str | None:
 
 # "remove it from my cart", "கார்ட்டிலிருந்து நீக்கு", "कार्ट से हटा दो"
 _REMOVE_FROM_CART_RE = re.compile(r"(?<![a-z])(remove|delete|take)(?![a-z]).{0,50}(?<![a-z])(cart|basket)(?![a-z])"
+                                  r"|(?<![a-z])(cart|basket)(?![a-z]).{0,40}(?<![a-z])(remove|eduthudunga|edunga|neekkunga)(?![a-z])"
+                                  r"|(?<![a-z])remove (pannunga|pannu|panni|karo|kar do)(?![a-z])"
                                   r"|(?<![a-z])(take|remove)(?![a-z]).{0,30}(?<![a-z])out of(?![a-z]).{0,20}(cart|basket)"
                                   r"|(கார்ட்|கூடை)[^\s]*.{0,40}(நீக்க|நீக்கு|எடு|அகற்று)"
                                   r"|(कार्ट|टोकरी).{0,40}(हटा|निकाल)")
@@ -400,11 +410,24 @@ class Intent:
     refers_back: bool = False          # the message points at something already discussed ("it", "this order")
     keyword_product: bool = False      # a shopping phrase ("do you have…") triggered the product search
     cheapest: bool = False             # "the cheapest / lowest-priced X": the lowest-priced X, not "cheaper than X"
+    catalogue: bool = False            # "what do you sell?": list the store's catalogue, not a keyword search
+    delivery_question: bool = False    # about WHEN an order arrives / whether it has shipped (not just its status)
+    order_ref: str | int | None = None  # "my other order" → "other"; "my second order" → 2; "my latest order" → "latest"
+    set_quantity: int | None = None    # "make it 2" / "change the quantity to 3" (a cart line)
+
+
+# Speech recognition writing the order prefix as spoken letter names in Tamil or Devanagari script ("எஸ் ஏ 50003",
+# "बी बी 20001"). Only two letter names immediately followed by five digits are read as an order number.
+_LETTER_NAMES = {"எஸ்": "S", "ஏ": "A", "பி": "B", "பீ": "B", "एस": "S", "ए": "A", "बी": "B"}
+_SPOKEN_ORDER_RE = re.compile(rf"(?:^|\s)({'|'.join(_LETTER_NAMES)})\s*-?\s*({'|'.join(_LETTER_NAMES)})\s*-?\s*(\d{{5}})(?!\d)")
 
 
 def normalise_order_number(text: str) -> str | None:
     m = ORDER_NUMBER_RE.search(text)
-    return f"{m.group(1).upper()}-{m.group(2)}" if m else None
+    if m:
+        return f"{m.group(1).upper()}-{m.group(2)}"
+    m = _SPOKEN_ORDER_RE.search(text)
+    return f"{_LETTER_NAMES[m.group(1)]}{_LETTER_NAMES[m.group(2)]}-{m.group(3)}" if m else None
 
 
 # Everyday words → the words the catalogues actually use ("backpack" must also find the "Daytrip 22L Daypack").
@@ -476,6 +499,78 @@ def extract_search_terms(text: str) -> list[str]:
     return terms[:8]
 
 
+# ---- broad catalogue questions ("What are the products you are selling right now?", "Enna products irukku?") -----------
+# A question about the whole range, with no product kind in it. Product words still go through the normal search.
+_CATALOGUE_RE = re.compile(
+    r"(?<![a-z])what (?:all )?(?:products?|items?|things|stuff|gear) (?:do|are|can|have) (?:you|u|i)(?![a-z])"
+    r"|(?<![a-z])what (?:are|r) (?:the |all the |your )?(?:products?|items?|things)(?![a-z])"
+    r"|(?<![a-z])(?:products?|items?) (?:that )?(?:you|u) (?:are |r )?(?:sell|selling|have|offer|offering|carry|stock)(?![a-z])"
+    r"|(?<![a-z])what (?:do|does|can) (?:you|u|this store|the store|your store) (?:sell|have|offer|carry|stock)(?![a-z])"
+    r"|(?<![a-z])what (?:can|could) i (?:buy|get|order|purchase)(?![a-z])"
+    r"|(?<![a-z])(?:all|every|full list of|list of|list all|list your|your|available|entire) (?:the )?(?:available )?"
+    r"(?:products?|items?|catalog(?:ue)?|range|inventory|stuff)(?![a-z])"
+    r"|(?<![a-z])(?:show|list|tell)(?: me)? (?:everything|what you have|what you sell|your catalog(?:ue)?)(?![a-z])"
+    r"|(?<![a-z])(?:show|list)(?: me)? (?:the |all |all the |your |some )?(?:products?|items?)(?![a-z])"
+    r"|(?<![a-z])(?:your|the|full|whole|complete|entire) (?:catalog(?:ue)?|product list)(?![a-z])"
+    r"|(?<![a-z])(?:enna|enna enna|ennenna) (?:products?|items?|porul\w*|saamaan\w*)(?![a-z])"
+    r"|(?<![a-z])(?:products?|items?) (?:enna|ennenna)(?![a-z])"
+    r"|என்ன(?:ென்ன)? (?:பொருட்கள்|பொருள்கள்|ப்ராடக்ட்ஸ்|புராடக்ட்ஸ்|ப்ராடக்ட்|பொருள்)|(?:எல்லா|அனைத்து) பொருட்க"
+    r"|பொருட்கள் என்ன|என்னென்ன (?:இருக்கு|உள்ளது|விற்கிறீர்கள்)|என்ன விற்கிறீர்கள்"
+    r"|क्या[- ]क्या (?:बेचते|मिलता|है)|क्या बेचते|कौन[- ]?से (?:प्रोडक्ट|सामान|उत्पाद)|(?:सारे|सभी|सब) (?:प्रोडक्ट|सामान|उत्पाद)"
+    r"|(?<![a-z])(?:kya kya|kaun se|kaunse|saare|sabhi) (?:products?|saman|samaan)(?![a-z])")
+
+# ---- order questions in Tanglish / spoken Tamil / English ("Order shipped aacha?", "Ennoda order eppo varum?") -------------
+_ORDER_Q_RE = re.compile(
+    r"(?<![a-z])order(?![a-z]).{0,40}(?<![a-z])(enga|engey|engay|eppo|epo|varum|varuma|vandhuchu|vanthuchu|vandhucha|vanthucha|"
+    r"varala|aacha|aachaa|achu|aachu|aagum|aguma|status|track|tracking|shipped|ship|dispatched|delivered|delivery|kab|kahan)(?![a-z])"
+    r"|(?<![a-z])(eppo|epo|enga|engey|kab|kahan)(?![a-z]).{0,30}(?<![a-z])(order|parcel|package)(?![a-z])"
+    r"|(?<![a-z])delivery(?![a-z]).{0,20}(?<![a-z])(date|eppo|epo|aagum|enna|kab|kitne din)(?![a-z])"
+    r"|(?<![a-z])(shipped|ship|dispatch(?:ed)?|delivered)(?![a-z]).{0,15}(?<![a-z])(aacha|aachaa|achu|aachu|aagiducha|hua|hui|kya)(?![a-z])"
+    r"|(?<![a-z])(?:when|how soon) (?:will|would|do|does|can) (?:i|it|my order|the order|they|you)(?: \w+){0,3} "
+    r"(?:get|receive|arrive|come|reach|deliver|be delivered|ship)(?![a-z])"
+    r"|(?<![a-z])(?:has|have|did|is) (?:it|my order|the order|my package|my parcel|[a-z]{2}-?\d{5})(?: been)? "
+    r"(?:ship|shipped|dispatched|delivered|sent|arrived|left)(?![a-z])"
+    r"|(?<![a-z])(?:delivery date|expected delivery|estimated delivery|expected date|eta|arrival date|receive my|get my order)(?![a-z])"
+    r"|எப்போ(?:து)? (?:பெறுவேன்|கிடைக்கும்|வந்து சேரும்|டெலிவரி)|டெலிவரி (?:தேதி|டேட்|எப்போ)|ஷிப் (?:ஆனதா|ஆச்சா|ஆகிவிட்டதா)|அனுப்பப்பட்டதா"
+    r"|डिलीवरी कब|कब (?:मिलेगा|मिलेगी|पहुँचेगा|पहुंचेगा|आएगा|आएगी)|शिप (?:हुआ|हो गया)|भेजा गया")
+# Within an order question: is it about WHEN it arrives / whether it has shipped (the answer must then say so plainly)?
+_DELIVERY_Q_RE = re.compile(
+    r"(?<![a-z])(when|eta|expected|estimated|delivery date|arrive|arrival|receive|ship|shipped|dispatch|dispatched|deliver|delivered|"
+    r"delivery|eppo|epo|varum|varuma|aagum|aacha|aachu|kab)(?![a-z])"
+    r"|எப்போ|தேதி|டேட்|வரும்|பெறு|கிடைக்கும்|ஷிப்|அனுப்ப|டெலிவரி|வந்து சேர|कब|तारीख|पहुँच|पहुंच|मिलेगा|आएगा|शिप|भेज|डिलीवरी")
+# "my other order", "only my second order", "the latest order", "இன்னொரு ஆர்டர்", "दूसरा ऑर्डर"
+_ORDER_REF_RE = re.compile(
+    r"(?<![a-z])(?P<other>other|another|innoru|innoru|matha|mattra)(?: one)? order(?![a-z])"
+    r"|(?<![a-z])(?P<ord>first|1st|second|2nd|third|3rd|fourth|4th|modhal|rendavathu|moonavathu) order(?![a-z])"
+    r"|(?<![a-z])(?P<latest>latest|last|newest|most recent|recent|previous|kadaisi) order(?![a-z])"
+    r"|(?P<ta_other>இன்னொரு ஆர்டர|மற்ற ஆர்டர|வேறு ஆர்டர)|(?P<ta_ord>முதல்|இரண்டாவது|மூன்றாவது) ஆர்டர"
+    r"|(?P<ta_latest>கடைசி|சமீபத்திய) ஆர்டர"
+    r"|(?P<hi_other>दूसरे वाले|दूसरा वाला|बाकी) ऑर्डर|(?P<hi_ord>पहला|पहले|दूसरा|दूसरे|तीसरा|तीसरे) ऑर्डर|(?P<hi_latest>पिछला|पिछले|आखिरी|आख़िरी|नया|नए) ऑर्डर")
+_ORDINAL_N = {"first": 1, "1st": 1, "modhal": 1, "முதல்": 1, "पहला": 1, "पहले": 1, "second": 2, "2nd": 2, "rendavathu": 2,
+              "இரண்டாவது": 2, "दूसरा": 2, "दूसरे": 2, "third": 3, "3rd": 3, "moonavathu": 3, "மூன்றாவது": 3, "तीसरा": 3, "तीसरे": 3,
+              "fourth": 4, "4th": 4}
+# "make it 2", "change the quantity to 3", "set the headlamp to 2", "quantity 2 aakunga", "2 ஆக மாற்று"
+_SET_QTY_RE = re.compile(
+    r"(?<![a-z])(?:make it|change (?:it|the quantity|quantity|qty)(?: of [a-z0-9 \-]{1,40})? to|set (?:the )?(?:quantity|qty)"
+    r"(?: of [a-z0-9 \-]{1,40})? to|update (?:the )?(?:quantity|qty)(?: of [a-z0-9 \-]{1,40})? to|quantity|qty)\s*(?P<n>\d{1,2})(?![\d.])"
+    r"|(?P<n2>\d{1,2})\s*(?:aa|ah|ஆக|ஆ)\s*(?:maathunga|mathunga|maathu|மாற்று|மாத்துங்க|பண்ணுங்க|ஆக்குங்க)"
+    r"|(?:मात्रा|क्वांटिटी)\s*(?P<n3>\d{1,2})", re.I)
+
+
+def order_reference(text: str) -> str | int | None:
+    m = _ORDER_REF_RE.search(text.lower())
+    if not m:
+        return None
+    if m.group("other") or m.group("ta_other") or m.group("hi_other"):
+        return "other"
+    if m.group("latest") or m.group("ta_latest") or m.group("hi_latest"):
+        return "latest"
+    word = m.group("ord") or m.group("ta_ord") or m.group("hi_ord")
+    if word in ("दूसरा", "दूसरे") and re.search(r"दूसरा वाला|दूसरे वाले", text):
+        return "other"
+    return _ORDINAL_N.get(word)
+
+
 def detect_intent(message: str) -> Intent:
     # Typographic quotes from phones and Macs ("hasn’t") behave like plain ones.
     message = message.replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
@@ -502,6 +597,20 @@ def detect_intent(message: str) -> Intent:
         found -= {"product", "price", "stock"} if not keyword_product else set()
     if "payment_issue" in care:
         found.discard("payment")       # a payment problem, not the "which cards do you accept" policy
+    catalogue = bool(_CATALOGUE_RE.search(text))
+    if catalogue:
+        found.add("product")
+        found -= {"stock"}             # "all available products" is the range, not a stock question
+    order_ref = order_reference(text)
+    if _ORDER_Q_RE.search(text) or order_ref is not None:
+        found.add("order_status")
+    set_qty = _SET_QTY_RE.search(text)
+    set_quantity = int(next(g for g in set_qty.group("n", "n2", "n3") if g)) if set_qty else None
+    if set_quantity is not None and ("cart" in found or "product" in found or care & {"add_to_cart"} or "quantity" in text
+                                     or "qty" in text or "make it" in text):
+        care.add("set_quantity")
+    else:
+        set_quantity = None
     script = script_language(message)
     order_number = normalise_order_number(message)
     if order_number:
@@ -547,7 +656,23 @@ def detect_intent(message: str) -> Intent:
     if "order_amount" in found:        # the customer's own order amount: no product search, no fee or price list
         found -= {"product", "price", "stock", "payment", "payment_issue"}
         terms = []
+    if "order_status" in found and "product" in found and not terms and max_price_cents is None and not catalogue \
+            and not care & {"compare", "cheaper", "alternative", "add_to_cart", "remove_from_cart", "attribute"}:
+        # "எனக்கு ஆர்டர் ஸ்டேட்டஸ் தெரிய வேண்டும்" / "order status venum": "want" words, not a product search.
+        found -= {"product", "price", "stock"}
+    if "set_quantity" in found:
+        # A cart line's quantity ("change the quantity to 3"), not an order change — unless an order number is named.
+        found -= {"product", "price", "stock", "add_to_cart"} | (set() if order_number else {"modify_order", "order_status"})
+        found.add("cart")
+        terms = []
+    if catalogue and not max_price_cents:
+        # Generic words ("products", "selling", "available") are not product names: list the range instead.
+        terms = [t for t in terms if t not in {"selling", "sold", "right", "carry", "offer", "offering", "range", "catalog",
+                                               "catalogue", "list", "entire", "full", "everything", "stuff", "gear", "thing",
+                                               "things", "inventory", "currently", "all", "available", "now"}]
     return Intent(intents=found, order_number=order_number, search_terms=terms, max_price_cents=max_price_cents,
                   budget_currency=budget.currency if budget else None, raw=message.lower(), script_language=script, quantity=requested_quantity(message),
                   sensitive=sensitive, keyword_product=keyword_product, refers_back=bool(_REFERS_BACK_RE.search(text)),
-                  cheapest="cheaper" in found and bool(_CHEAPEST_RE.search(text)))
+                  cheapest="cheaper" in found and bool(_CHEAPEST_RE.search(text)), catalogue=catalogue,
+                  delivery_question="order_status" in found and bool(_DELIVERY_Q_RE.search(text)), order_ref=order_ref,
+                  set_quantity=set_quantity)

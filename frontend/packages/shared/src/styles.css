@@ -452,3 +452,6 @@ h3.product-name { margin: 0; font-family: var(--font-display); font-size: 1.08re
 .section-head h2 { margin: 0; font-size: 1.3rem; }
 .checkout-saved-addresses { margin-bottom: 16px; }
 .checkout-saved-addresses h2 { margin-bottom: 4px; }
+
+/* Replay a reply aloud (also the way to hear it when the browser blocked automatic playback) */
+.icon-btn.replay { min-width: 32px; min-height: 32px; padding: 0 6px; font-size: .95rem; margin-right: 6px; }

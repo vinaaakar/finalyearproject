@@ -1,7 +1,7 @@
 // Speech adapters (voice.js) with fake browser audio: recorder end-of-speech, no-speech and length limits, cancellation,
 // permission errors, transcription timeout; speaker voice choice (local voices only) and interruption.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServerRecognizer, encodeWav, pickVoice, speaker } from '../voice.js';
+import { createServerRecognizer, encodeWav, pickVoice, speaker, speechChunks } from '../voice.js';
 
 // ---- fake microphone + Web Audio --------------------------------------------------------------------------------------
 let processor;
@@ -37,7 +37,7 @@ describe('server recognizer (local whisper.cpp path)', () => {
     await rec.start();
     expect(cb.onInterim).toHaveBeenCalledWith('listening');
     for (let i = 0; i < 5; i++) processor.onaudioprocess(frame(0.2));       // speech
-    for (let i = 0; i < 16; i++) processor.onaudioprocess?.(frame(0));       // ≥ 1.2 s of silence (handler detaches when it stops)
+    for (let i = 0; i < 19; i++) processor.onaudioprocess?.(frame(0));       // ≥ 1.5 s of silence (handler detaches when it stops)
     await flush(); await flush();
     expect(transcribe).toHaveBeenCalledTimes(1);
     const [wav, lang] = transcribe.mock.calls[0];
@@ -202,5 +202,109 @@ describe('speaker speaking state (UI indicator)', () => {
     await speaker.speak('फिर से', 'hi');
     speaker.cancel();                                   // the customer pressed Stop / the mic
     expect(seen).toEqual([true, false, true, false]);
+  });
+});
+
+// ---- added: real playback outcomes are reported, never assumed --------------------------------------------------------
+describe('recorder reports audio that never arrived, and sends the conversation hint', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); delete globalThis.AudioContext; });
+
+  it('creates the audio context inside the tap, before the permission prompt resolves (Safari)', async () => {
+    let created = 0;
+    const order = [];
+    globalThis.AudioContext = class extends FakeAudioContext { constructor() { super(); created += 1; order.push('ctx'); } };
+    const getUserMedia = vi.fn(() => { order.push('mic'); return Promise.resolve({ getTracks: () => [track] }); });
+    Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia }, configurable: true });
+    const rec = createServerRecognizer({ transcribe: vi.fn(), onError: vi.fn(), onEnd: vi.fn() });
+    await rec.start();
+    expect(created).toBe(1);
+    expect(order).toEqual(['ctx', 'mic']);
+    await rec.cancel();
+  });
+
+  it('no audio frames at all → "no-audio" (not "you said nothing")', async () => {
+    const { rec, cb, transcribe } = setup();
+    await rec.start();                                   // the processor never fires: no audio reached the page
+    vi.advanceTimersByTime(2600);
+    await flush();
+    expect(cb.onError).toHaveBeenCalledWith('no-audio');
+    expect(transcribe).not.toHaveBeenCalled();
+  });
+
+  it('passes the conversation language as a transcription hint', async () => {
+    const { rec, transcribe } = setup({ hint: () => 'ta' });
+    await rec.start();
+    for (let i = 0; i < 5; i++) processor.onaudioprocess(frame(0.2));
+    for (let i = 0; i < 19; i++) processor.onaudioprocess?.(frame(0));
+    await flush(); await flush();
+    expect(transcribe).toHaveBeenCalledWith(expect.any(Blob), 'auto', 'ta');
+  });
+});
+
+describe('speech chunks', () => {
+  it('splits at sentence ends in all three scripts and keeps every word', () => {
+    const text = 'Order SA-50001 is being prepared. It has not shipped yet! ஆர்டர் தயாராகிறது. ऑर्डर तैयार हो रहा है।';
+    const chunks = speechChunks(text);
+    expect(chunks).toEqual(['Order SA-50001 is being prepared.', 'It has not shipped yet!', 'ஆர்டர் தயாராகிறது.', 'ऑर्डर तैयार हो रहा है।']);
+    const long = `${'word, '.repeat(80)}end.`;
+    expect(speechChunks(long).every((c) => c.length <= 220)).toBe(true);
+    expect(speechChunks(long).join(' ').replace(/\s+/g, ' ')).toBe(long.replace(/\s+/g, ' ').trim());
+  });
+});
+
+describe('speaker outcomes', () => {
+  let synth, utters;
+  beforeEach(() => {
+    utters = [];
+    synth = { getVoices: vi.fn(() => [{ name: 'Rishi', lang: 'en-IN', localService: true }]), speak: vi.fn((u) => utters.push(u)), cancel: vi.fn(),
+      addEventListener: vi.fn((_, fn) => fn()), removeEventListener: vi.fn() };
+    Object.defineProperty(window, 'speechSynthesis', { value: synth, configurable: true });
+    globalThis.SpeechSynthesisUtterance = function U(text) { this.text = text; };
+    speaker.primed = false; speaker.element = null;
+  });
+  afterEach(() => { delete window.speechSynthesis; delete globalThis.SpeechSynthesisUtterance; delete globalThis.Audio; speaker.onChange = null; });
+
+  it('reads a long reply as several utterances and ends only after the last one', async () => {
+    const seen = [];
+    speaker.onChange = (v) => seen.push(v);
+    await speaker.speak('First sentence. Second sentence. Third sentence.', 'en');
+    expect(utters.map((u) => u.text)).toEqual(['First sentence.', 'Second sentence.', 'Third sentence.']);
+    utters[0].onend?.();
+    expect(speaker.speaking).toBe(true);
+    utters[2].onend();
+    expect(seen).toEqual([true, false]);
+  });
+
+  it('a speech-synthesis error is reported, but our own interruption is not', async () => {
+    const onError = vi.fn();
+    await speaker.speak('Hello.', 'en', { onError });
+    utters[0].onerror({ error: 'interrupted' });
+    expect(onError).not.toHaveBeenCalled();
+    utters[0].onerror({ error: 'not-allowed' });
+    expect(onError).toHaveBeenCalledWith('blocked');
+    expect(speaker.speaking).toBe(false);
+  });
+
+  it('server audio blocked by the autoplay policy → "blocked"; empty or failed audio → "error"', async () => {
+    synth.getVoices.mockReturnValue([]);
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:x');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    const blocked = Object.assign(new Error('blocked'), { name: 'NotAllowedError' });
+    globalThis.Audio = vi.fn(() => ({ play: vi.fn().mockRejectedValue(blocked), pause: vi.fn() }));
+    expect(await speaker.speak('நன்றி', 'ta', { serverTts: async () => new Blob(['RIFF']) })).toEqual({ mode: 'blocked', voice: null });
+    expect(speaker.speaking).toBe(false);
+    expect((await speaker.speak('நன்றி', 'ta', { serverTts: async () => new Blob([]) })).mode).toBe('error');
+    expect((await speaker.speak('நன்றி', 'ta', { serverTts: async () => { throw new Error('503'); } })).mode).toBe('error');
+  });
+
+  it('prime() unlocks playback once, from a tap', () => {
+    const play = vi.fn().mockResolvedValue(undefined);
+    globalThis.Audio = vi.fn(() => ({ play, pause: vi.fn() }));
+    speaker.prime();
+    speaker.prime();
+    expect(synth.speak).toHaveBeenCalledTimes(1);
+    expect(synth.speak.mock.calls[0][0].volume).toBe(0);
+    expect(play).toHaveBeenCalledTimes(1);
   });
 });

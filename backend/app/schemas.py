@@ -72,6 +72,8 @@ class ChatResponse(BaseModel):
     # server has just created (only ever set from the database's own record).
     care_draft: dict | None = None
     care_reference: str | None = None
+    # Server-side latency in milliseconds ("total", and "llm" when the local model was called) — for measuring, not display.
+    timing: dict[str, int] = {}
 
 
 class PhoneTurnRequest(BaseModel):

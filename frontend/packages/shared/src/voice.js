@@ -78,7 +78,8 @@ export function createBrowserRecognizer({ lang = 'ta-IN', onInterim, onFinal, on
 // ---- server (local engine) recognizer -------------------------------------------------------
 const TARGET_RATE = 16000;
 const SPEECH_RMS = 0.015;      // level treated as speech
-const END_SILENCE_MS = 1200;   // stop this long after the speaker goes quiet
+const END_SILENCE_MS = 1500;   // stop this long after the speaker goes quiet (natural Tamil/Hindi pauses mid-sentence)
+const NO_AUDIO_MS = 2500;      // the microphone delivered no audio frames at all (suspended audio context, muted device)
 const NO_SPEECH_MS = 6000;     // give up if nothing is said
 const MAX_MS = 15000;          // hard cap per utterance
 const TRANSCRIBE_TIMEOUT_MS = 45000; // the server engine has its own 30 s limit; never wait forever on the network
@@ -112,11 +113,11 @@ export function encodeWav(samples, rate = TARGET_RATE) {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
-export function createServerRecognizer({ transcribe, language = 'auto', onInterim, onFinal, onError, onEnd,
+export function createServerRecognizer({ transcribe, language = 'auto', hint = null, onInterim, onFinal, onError, onEnd,
   transcribeTimeoutMs = TRANSCRIBE_TIMEOUT_MS }) {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof AudioContext === 'undefined') return null;
   let stream, ctx, node, source, timer;
-  let chunks = [], finished = false, heardSpeech = false, quietMs = 0, startedAt = 0;
+  let chunks = [], finished = false, heardSpeech = false, quietMs = 0, startedAt = 0, frames = 0;
 
   function release() {
     clearInterval(timer);
@@ -133,7 +134,8 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
     try {
       if (cancelled) return;
       if (!heardSpeech) {
-        onError?.('no-speech');
+        // No frames at all means the audio never reached us (a suspended context or a muted input), not silence.
+        onError?.(frames === 0 ? 'no-audio' : 'no-speech');
         return;
       }
       const total = chunks.reduce((n, c) => n + c.length, 0);
@@ -146,7 +148,9 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
       const timedOut = new Promise((_, reject) => { timeoutId = setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), transcribeTimeoutMs); });
       let result;
       try {
-        result = await Promise.race([transcribe(audio, language), timedOut]);
+        // The conversation language (hint) only affects how weakly-detected "English" (often Tanglish) is transcribed.
+        const h = typeof hint === 'function' ? hint() : hint;
+        result = await Promise.race([h ? transcribe(audio, language, h) : transcribe(audio, language), timedOut]);
       } finally {
         clearTimeout(timeoutId);
       }
@@ -154,7 +158,8 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
       onInterim?.('');
       if (text) {
         onFinal?.(text, { engine: 'server', detected: result.detected_language, probability: result.language_probability,
-          uncertain: result.uncertain, receipt: result.speech_receipt, audio });
+          uncertain: result.uncertain, receipt: result.speech_receipt, audio,
+          audioSeconds: result.audio_seconds ?? null, transcribeMs: result.elapsed_ms ?? null });
       } else onError?.('no-speech');
     } catch (e) {
       if (e?.code === 'timeout' || e?.code === 'network') onError?.('network');
@@ -169,21 +174,27 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
     kind: 'server',
     privacyNote: 'Voice is transcribed by this store’s own server with a local speech engine. Audio is not sent to third parties or stored.',
     async start() {
+      // Created synchronously inside the tap, BEFORE awaiting the permission prompt: Safari only lets an AudioContext run
+      // when it is created/resumed during a user gesture, and the gesture is gone once getUserMedia resolves.
+      ctx = new AudioContext();
+      const resumed = ctx.state === 'suspended' ? ctx.resume().catch(() => {}) : null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
       } catch (e) {
         finished = true;
+        ctx.close().catch(() => {});
         onError?.(e?.name === 'NotAllowedError' || e?.name === 'SecurityError' ? 'not-allowed' : e?.name === 'NotFoundError' ? 'audio-capture' : 'failed');
         onEnd?.();
         return;
       }
-      ctx = new AudioContext();
+      if (resumed) await resumed;
       if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
       source = ctx.createMediaStreamSource(stream);
       // ScriptProcessorNode is deprecated but universally supported and needs no extra module file.
       node = ctx.createScriptProcessor(4096, 1, 1);
       node.onaudioprocess = (e) => {
         if (finished) return;
+        frames += 1;
         const data = e.inputBuffer.getChannelData(0);
         chunks.push(new Float32Array(data));
         let sum = 0;
@@ -198,7 +209,7 @@ export function createServerRecognizer({ transcribe, language = 'auto', onInteri
       startedAt = Date.now();
       timer = setInterval(() => {
         const elapsed = Date.now() - startedAt;
-        if (elapsed >= MAX_MS || (!heardSpeech && elapsed >= NO_SPEECH_MS)) finish();
+        if (elapsed >= MAX_MS || (!heardSpeech && elapsed >= NO_SPEECH_MS) || (frames === 0 && elapsed >= NO_AUDIO_MS)) finish();
       }, 250);
       onInterim?.('listening');
     },
@@ -242,8 +253,31 @@ function voicesSoon(timeoutMs) {
   });
 }
 
+// One reply is read as several short utterances: Chrome stops a single long utterance after ~15 s, and short sentences
+// can be interrupted cleanly. Splits at sentence ends (., ?, !, ।) and, for very long sentences, at commas/semicolons.
+export function speechChunks(text, max = 220) {
+  const sentences = (text || '').replace(/\s+/g, ' ').trim().match(/[^.?!।]+[.?!।]*\s*/g) || [];
+  const out = [];
+  for (const raw of sentences) {
+    let sentence = raw.trim();
+    while (sentence.length > max) {
+      const cut = Math.max(sentence.lastIndexOf(', ', max - 1), sentence.lastIndexOf('; ', max - 1), sentence.lastIndexOf(' ', max - 1));
+      const at = cut > 40 ? cut + 1 : max;
+      out.push(sentence.slice(0, at).trim());
+      sentence = sentence.slice(at).trim();
+    }
+    if (sentence) out.push(sentence);
+  }
+  return out;
+}
+
+// A 0.1 s silent WAV: played once inside a tap so Safari (and Chrome's autoplay policy) let later replies play.
+const SILENT_WAV = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQQAAAAAAAAA';
+
 export const speaker = {
   audio: null,
+  element: null,      // one reusable <audio> element, unlocked by prime() during a tap
+  primed: false,
   // Incremented by every cancel(): a speak() still waiting for voices or server audio checks it before making a sound,
   // so a reply never starts after the customer interrupted it (pressed the mic, closed the chat, sent a new message).
   generation: 0,
@@ -259,10 +293,40 @@ export const speaker = {
     return voiceSupport().synthesis;
   },
   /**
-   * Speak `text` in `lang` ('ta' | 'en' | 'hi'). Returns { mode: 'browser' | 'server' | 'none', voice }.
+   * Call synchronously from a tap/click (send, mic, "play" buttons). Browsers — Safari in particular — refuse to start
+   * speech or audio that is not tied to a user gesture; a reply arrives seconds later, after the gesture has ended.
+   * Priming once (a silent utterance and a silent clip on a reusable audio element) lets those later replies play.
+   */
+  prime() {
+    if (this.primed || typeof window === 'undefined') return;
+    this.primed = true;
+    try {
+      if (this.supported && typeof SpeechSynthesisUtterance !== 'undefined') {
+        const u = new SpeechSynthesisUtterance(' ');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+    } catch { /* speech synthesis unavailable: server audio may still work */ }
+    try {
+      if (typeof Audio !== 'undefined') {
+        this.element = this.element || new Audio();
+        this.element.src = SILENT_WAV;
+        const p = this.element.play?.();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      }
+    } catch { /* no audio element support */ }
+  },
+  /**
+   * Speak `text` in `lang` ('ta' | 'en' | 'hi'). Resolves to { mode, voice, error? }:
+   *   'browser' — a local voice is speaking it; later failures are reported through `onError(code)`
+   *   'server'  — the store's local TTS audio is playing
+   *   'blocked' — the browser refused to start playback without a tap (autoplay policy): offer a "play" button
+   *   'error'   — speech was attempted but failed (server TTS error, empty audio, playback error)
+   *   'none'    — no voice for this language on this device and no server TTS: text only
+   *   'cancelled' — interrupted before it started
    * `serverTts(text, lang)` (optional) returns a WAV Blob from the store's local TTS.
    */
-  async speak(text, lang, { serverTts, rate = 1 } = {}) {
+  async speak(text, lang, { serverTts, rate = 1, onError } = {}) {
     this.cancel();
     const gen = this.generation;
     const interrupted = () => gen !== this.generation;
@@ -273,32 +337,55 @@ export const speaker = {
       if (!voice) voice = pickVoice(await voicesSoon(1500), bcp47);
       if (interrupted()) return { mode: 'cancelled', voice: null };
       if (voice) {
-        const u = new SpeechSynthesisUtterance(text);
-        u.voice = voice;
-        u.lang = voice.lang;
-        u.rate = rate;
+        const chunks = speechChunks(text);
         const done = () => { if (gen === this.generation) this.setSpeaking(false); };
-        u.onend = done;
-        u.onerror = done;
+        chunks.forEach((chunk, i) => {
+          const u = new SpeechSynthesisUtterance(chunk);
+          u.voice = voice;
+          u.lang = voice.lang;
+          u.rate = rate;
+          if (i === chunks.length - 1) u.onend = done;
+          u.onerror = (e) => {
+            // 'interrupted' / 'canceled' are our own cancel(); anything else means the reply was NOT heard.
+            if (e?.error === 'interrupted' || e?.error === 'canceled') return;
+            if (gen !== this.generation) return;
+            done();
+            window.speechSynthesis.cancel();
+            onError?.(e?.error === 'not-allowed' ? 'blocked' : 'failed');
+          };
+          window.speechSynthesis.speak(u);
+        });
         this.setSpeaking(true);
-        window.speechSynthesis.speak(u);
         return { mode: 'browser', voice: voice.name };
       }
     }
     if (serverTts) {
+      let blob;
       try {
-        const blob = await serverTts(text, lang);
-        if (interrupted()) return { mode: 'cancelled', voice: null };
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.addEventListener('ended', () => { URL.revokeObjectURL(url); if (gen === this.generation) this.setSpeaking(false); }, { once: true });
-        audio.objectUrl = url;
-        this.audio = audio;
-        this.setSpeaking(true);
+        blob = await serverTts(text, lang);
+      } catch (e) {
+        return interrupted() ? { mode: 'cancelled', voice: null } : { mode: 'error', voice: null, error: e?.message || 'server' };
+      }
+      if (interrupted()) return { mode: 'cancelled', voice: null };
+      if (!blob || blob.size === 0) return { mode: 'error', voice: null, error: 'empty' };
+      const url = URL.createObjectURL(blob);
+      const audio = this.element || new Audio();
+      audio.src = url;
+      audio.objectUrl = url;
+      this.audio = audio;
+      const finished = () => {
+        if (audio.objectUrl === url) { URL.revokeObjectURL(url); audio.objectUrl = null; }
+        if (gen === this.generation) this.setSpeaking(false);
+      };
+      audio.onended = finished;
+      audio.onerror = () => { finished(); if (gen === this.generation) onError?.('failed'); };
+      this.setSpeaking(true);
+      try {
         await audio.play();
         return { mode: 'server', voice: null };
-      } catch {
-        /* fall through to text only */
+      } catch (e) {
+        finished();
+        return e?.name === 'NotAllowedError' ? { mode: 'blocked', voice: null } : { mode: 'error', voice: null, error: e?.message || 'play' };
       }
     }
     return { mode: 'none', voice: null };
@@ -308,8 +395,9 @@ export const speaker = {
     this.setSpeaking(false);
     if (this.supported) window.speechSynthesis.cancel();
     if (this.audio) {
-      this.audio.pause();
+      this.audio.pause?.();
       if (this.audio.objectUrl) URL.revokeObjectURL(this.audio.objectUrl);
+      this.audio.objectUrl = null;
       this.audio = null;
     }
   },

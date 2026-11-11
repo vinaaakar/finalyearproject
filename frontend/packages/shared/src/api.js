@@ -260,10 +260,12 @@ export function createApi(storeId) {
       return res.blob();
     },
     // Returns { text, language, detected_language, language_probability, used_default }.
-    async transcribe(wavBlob, language = 'auto') {
+    // `hint` = the conversation language; it only changes how weakly-detected "English" (often Tanglish) is transcribed.
+    async transcribe(wavBlob, language = 'auto', hint = null) {
       let res;
+      const qs = `language=${encodeURIComponent(language)}${hint ? `&hint=${encodeURIComponent(hint)}` : ''}`;
       try {
-        res = await fetch(`${base}/speech/transcribe?language=${encodeURIComponent(language)}`, {
+        res = await fetch(`${base}/speech/transcribe?${qs}`, {
           method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wavBlob,
         });
       } catch {

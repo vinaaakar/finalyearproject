@@ -6,15 +6,25 @@ import OrderCard from './components/OrderCard.jsx';
 import { selectRecognizer, speaker, voiceSupport } from './voice.js';
 import { DEFAULT_LANGUAGE, LANGUAGES, SUPPORTED, suggestionsFor, tr } from './i18n.js';
 
-const SPEAK_PREF_KEY = 'avc:speak-replies';
+// Read-aloud preference: 'on' (every reply), 'off' (never), or 'auto' (the default: replies to VOICE questions are spoken).
+// Saved only when the customer changes it. (The previous key was written on every page load, so a stored "0" did not mean
+// the customer turned it off; only its "1" is carried over.)
+const READ_ALOUD_KEY = 'avc:read-aloud';
+const LEGACY_SPEAK_PREF_KEY = 'avc:speak-replies';
 
 function readPref() {
   try {
-    return localStorage.getItem(SPEAK_PREF_KEY) === '1';
+    const v = localStorage.getItem(READ_ALOUD_KEY);
+    if (v === 'on' || v === 'off') return v;
+    return localStorage.getItem(LEGACY_SPEAK_PREF_KEY) === '1' ? 'on' : 'auto';
   } catch {
-    return false;
+    return 'auto';
   }
 }
+
+// "yes" / "ஆம்" / "हाँ" / "sari" typed or said right after the assistant proposed ONE cart change: the same as tapping it.
+const AFFIRM_RE = /^\s*(yes|yeah|yep|yup|ok(ay)?|sure|confirm|go ahead|please do|do it|add it|yes please|ஆம்|ஆமா|ஆமாம்|சரி|ஓகே|சேர்|சேர்த்துவிடு|ஆட் பண்ணுங்க|हाँ|हां|जी हाँ|जी हां|ठीक है|जोड़ दो|haan|han|haa|ji haan|theek hai|aama|aamaa|aam|sari|seri|add pannunga|podunga)[\s.!।]*$/i;
+const CONFIRMABLE = new Set(['add_to_cart', 'remove_from_cart', 'set_cart_quantity']);
 
 // The conversation language lives in sessionStorage per store: a new tab (new guest conversation)
 // starts in Tamil, and Store A and Store B never share it.
@@ -109,7 +119,8 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
   const [speaking, setSpeaking] = useState(false);
   const [interim, setInterim] = useState('');
   const [voiceNotice, setVoiceNotice] = useState(null);
-  const [speakReplies, setSpeakReplies] = useState(readPref);
+  const [readAloud, setReadAloud] = useState(readPref);
+  const speakReplies = readAloud === 'on';
   const [speechCaps, setSpeechCaps] = useState(null);
   const [lang, setLang] = useState(() => loadConversationLanguage(convKey));
   const recognizerRef = useRef(null);
@@ -230,29 +241,60 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, interim, busy, confirming]);
 
-  useEffect(() => {
+  function changeReadAloud(on) {
+    const v = on ? 'on' : 'off';
+    setReadAloud(v);
     try {
-      localStorage.setItem(SPEAK_PREF_KEY, speakReplies ? '1' : '0');
+      localStorage.setItem(READ_ALOUD_KEY, v);
     } catch {
       /* preference just won't persist */
     }
-    if (!speakReplies) speaker.cancel();
-  }, [speakReplies]);
+    if (on) speaker.prime();       // this tap unlocks audio for the replies that follow (Safari)
+    else speaker.cancel();
+  }
+  const shouldSpeak = (viaVoice) => readAloud === 'on' || (readAloud === 'auto' && viaVoice);
 
   const serverStt = !!speechCaps?.server_stt?.available;
   const autoDetect = serverStt && !!speechCaps?.server_stt?.language_detection;
   const serverTtsVoices = speechCaps?.server_tts?.available ? speechCaps.server_tts.voices || {} : {};
 
-  async function say(text, replyLang) {
+  // Reads a reply aloud and reports what really happened: a reply shown as text is NOT a reply that was heard.
+  async function say(text, replyLang, id = null) {
     const serverTts = serverTtsVoices[replyLang] ? (txt, l) => api.synthesize(txt, l) : null;
-    const result = await speaker.speak(text, replyLang, { serverTts });
+    const mark = (tts) => id && setMessages((m) => m.map((x) => (x.id === id ? { ...x, tts } : x)));
+    const onError = (code) => {
+      setVoiceNotice(tr(langRef.current, code === 'blocked' ? 'playBlocked' : 'playFailed'));
+      mark({ mode: code === 'blocked' ? 'blocked' : 'error', voice: null });
+    };
+    const result = await speaker.speak(text, replyLang, { serverTts, onError });
     if (result.mode === 'none') setVoiceNotice(tr(langRef.current, 'noVoice', { lang: LANGUAGES[replyLang].native }));
+    else if (result.mode === 'blocked') setVoiceNotice(tr(langRef.current, 'playBlocked'));
+    else if (result.mode === 'error') setVoiceNotice(tr(langRef.current, 'playFailed'));
+    mark(result);
     return result;
+  }
+
+  function replay(m) {
+    speaker.prime();
+    setVoiceNotice(null);
+    say(m.content, m.language || langRef.current, m.id);
   }
 
   async function send(text, { viaVoice = false, voiceMeta = null, override = null } = {}) {
     const message = text.trim();
     if (!message || busyRef.current) return;
+    speaker.prime();   // the send tap unlocks audio playback for the reply (Safari / autoplay policies)
+    // "yes" right after ONE proposed cart change confirms it, exactly like tapping its button (never for a cancellation,
+    // and never from an uncertain voice transcript).
+    const last = [...messagesRef.current].reverse().find((x) => x.role === 'assistant' && !x.system);
+    const pending = (last?.actions || []).map((a, i) => [a, `${last.id}:${i}`])
+      .filter(([a, key]) => CONFIRMABLE.has(a.type) && !(last.done && key in last.done));
+    if (pending.length === 1 && AFFIRM_RE.test(message) && !voiceMeta?.uncertain) {
+      setMessages((m) => [...m, { role: 'user', content: message, viaVoice, voiceMeta }]);
+      setInput('');
+      await runAction(last, pending[0][0], pending[0][1], { viaVoice });
+      return;
+    }
     const history = messagesRef.current.filter((m) => !m.error).slice(-8).map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }));
     speaker.cancel();   // a new question interrupts a reply that is still being read aloud
     setMessages((m) => [...m, { role: 'user', content: message, viaVoice, voiceMeta }]);
@@ -276,9 +318,7 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
       // The conversation follows the language of each new utterance (not on a clarification).
       if (!r.clarification) setLang(r.language);
       setMessages((m) => [...m, reply]);
-      if (viaVoice || speakReplies) {
-        say(r.reply, r.language).then((tts) => setMessages((m) => m.map((x) => (x.id === id ? { ...x, tts } : x))));
-      }
+      if (shouldSpeak(viaVoice)) say(r.reply, r.language, id);
     } catch (e) {
       setMessages((m) => [...m, { role: 'assistant', content: e.status === 429 ? tr(langRef.current, 'rateLimited') : e.message, error: true }]);
     } finally {
@@ -307,8 +347,9 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
 
   // Action buttons proposed by the assistant. The existing store API performs and validates every action;
   // the chat says it happened only after that API call succeeds.
-  async function runAction(m, a, key) {
+  async function runAction(m, a, key, { viaVoice = false } = {}) {
     if (actionBusy.current) return;
+    speaker.prime();
     if (a.type === 'link') {
       if (a.to.startsWith('mailto:')) { window.location.href = a.to; return; }
       onClose();
@@ -333,6 +374,10 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
         const cart = await api.addToCart(a.slug, a.quantity);
         ok = cart.items.some((i) => i.slug === a.slug);
         text = ok ? tr(replyLang, 'actionAdded', { qty: a.quantity, name: a.name }) : tr(replyLang, 'actionFailed');
+      } else if (a.type === 'set_cart_quantity') {
+        const cart = await api.updateCartItem(a.slug, a.quantity);
+        ok = cart.items.some((i) => i.slug === a.slug && i.quantity === a.quantity);
+        text = ok ? tr(replyLang, 'actionQuantity', { qty: a.quantity, name: a.name }) : tr(replyLang, 'actionFailed');
       } else if (a.type === 'remove_from_cart') {
         const cart = await api.removeCartItem(a.slug);
         ok = !cart.items.some((i) => i.slug === a.slug);
@@ -354,7 +399,7 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
       ...ms.map((x) => (x.id === m.id ? { ...x, done: { ...(x.done || {}), [key]: ok } } : x)),
       { id: `${Date.now()}-a`, role: 'assistant', content: text, language: replyLang, system: true, error: !ok },
     ]);
-    if (m.viaVoice || speakReplies) say(text, replyLang);
+    if (shouldSpeak(m.viaVoice || viaVoice)) say(text, replyLang);
   }
 
   const lastAssistantId = [...messages].reverse().find((x) => x.role === 'assistant' && !x.system)?.id;
@@ -385,7 +430,7 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
           }
           const stale = a.type === 'reply' && m.id !== lastAssistantId;
           return (
-            <button key={key} type="button" className={`btn btn-small ${a.type === 'add_to_cart' || (a.type === 'reply' && i === 0 && m.actions.length === 2) ? 'btn-primary' : ''}`}
+            <button key={key} type="button" className={`btn btn-small ${a.type === 'add_to_cart' || a.type === 'set_cart_quantity' || (a.type === 'reply' && i === 0 && m.actions.length === 2) ? 'btn-primary' : ''}`}
               disabled={busy || stale} onClick={() => runAction(m, a, key)}>{a.label}</button>
           );
         })}
@@ -403,9 +448,11 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
       setVoiceNotice(t('insecure'));
       return;
     }
+    speaker.prime();
     const rec = selectRecognizer(speechCaps, {
       // Server engine: identifies the language from the audio ('auto'). Browser engine: must listen in one locale.
       language: 'auto',
+      hint: () => langRef.current,
       lang: LANGUAGES[langRef.current].bcp47,
       transcribe: api.transcribe,
       onInterim: (s) => setInterim(s === 'listening' || s === 'transcribing' ? tr(langRef.current, s) : s),
@@ -491,6 +538,10 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
             {m.requiresLogin && <Link className="btn btn-primary btn-small" to="/account" onClick={onClose}>{t('signIn')}</Link>}
             {m.actions?.length > 0 && actionButtons(m)}
             {m.cart?.items?.length > 0 && <Link className="btn btn-small" to="/cart" onClick={onClose}>{t('viewCart')}</Link>}
+            {m.role === 'assistant' && !m.error && (support.synthesis || Object.keys(serverTtsVoices).length > 0) && (
+              <button type="button" className="icon-btn replay" onClick={() => replay(m)} aria-label={t('playReply')}
+                title={t('playReply')} data-tts-mode={m.tts?.mode || ''}>🔊</button>
+            )}
             {m.role === 'assistant' && !m.error && !m.system && (
               <span className="source-tag">
                 {languageTag(m)}{languageTag(m) && m.source === 'rules' ? ' · ' : ''}{m.source === 'rules' ? t('quickAnswer') : ''}
@@ -535,9 +586,10 @@ export default function ChatWidget({ open, prefill, onOpen, onClose }) {
         )}
         <label className="toggle">
           <input type="checkbox" checked={speakReplies} disabled={!support.synthesis && !Object.keys(serverTtsVoices).length}
-            onChange={(e) => setSpeakReplies(e.target.checked)} />
+            onChange={(e) => changeReadAloud(e.target.checked)} />
           {t('readAloud')}
         </label>
+        {readAloud === 'auto' && <span className="lang-note">{t('readAloudAuto')}</span>}
         {serverStt ? (
           <span className="privacy-note">{t('privacyServer', { store: config.name })}</span>
         ) : support.recognition && <span className="privacy-note">{t('privacyBrowser')}</span>}
