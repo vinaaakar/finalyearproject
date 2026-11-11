@@ -80,6 +80,7 @@ export function ContactPage() {
         <div><dt>{t('email')}</dt><dd><a href={`mailto:${info.support_email}`}>{info.support_email}</a></dd></div>
         <div><dt>{t('hours')}</dt><dd>{info.support_hours}</dd></div>
         <div><dt>{t('chat')}</dt><dd><button type="button" className="link-btn" onClick={() => openChat()}>{t('ask', { assistant: config.assistantName })}</button>, {t('anyTime')}</dd></div>
+        <div><dt>{t('phone')}</dt><dd><Link to="/support/call">{t('callTry')}</Link></dd></div>
       </dl>
       <p className="muted">{t('notPublished', { store: info.name })}</p>
       <p>{t('orderHint', { example: `${info.order_number_prefix}-50001` })} <Link to="/account">{t('yourAccount')}</Link>.</p>
@@ -95,6 +96,7 @@ export function HelpPage() {
     ['/shipping', t('shipping'), info?.policies?.shipping?.summary],
     ['/returns', t('returnsWarranty'), info?.policies?.returns?.summary],
     ['/contact', t('contact'), info ? `${info.support_email} · ${info.support_hours}` : null],
+    ['/support/call', t('callTry'), t('callTryText')],
   ];
   return (
     <section className="support-page" aria-labelledby="help-title">

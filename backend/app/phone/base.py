@@ -25,7 +25,10 @@ class OutboundTurn:
     say: str
     expect_input: bool = True
     hang_up: bool = False
+    # No adapter routes calls to a person today (there is no staffed line), so the call flow never sets this; a provider
+    # with a real handoff queue would read it. Requests for a person are recorded as care requests instead.
     transfer_to_agent: bool = False
+    language: str = "en"        # "ta" | "en" | "hi": the language `say` is written in (for the provider's text-to-speech)
 
 
 class PhoneProvider(ABC):

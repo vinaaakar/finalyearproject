@@ -238,6 +238,11 @@ export function createApi(storeId) {
         },
       }),
     speechCapabilities: () => request('/api/speech/capabilities'),
+    // Simulated customer-care phone line (no telephone network): the real call flow over text turns.
+    phoneStart: (language) => request(`/api/phone/simulator/${storeId}/calls`, { method: 'POST', body: language ? { language } : {} }),
+    phoneTurn: (callId, { speech, digits } = {}) => request(`/api/phone/simulator/calls/${encodeURIComponent(callId)}/turns`, {
+      method: 'POST', body: { ...(speech !== undefined && { speech }), ...(digits !== undefined && { digits }) },
+    }),
     async synthesize(text, language) {
       const res = await fetch('/api/speech/synthesize', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, language }),

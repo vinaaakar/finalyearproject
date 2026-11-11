@@ -81,7 +81,10 @@ class PhoneTurnRequest(BaseModel):
 
 
 class PhoneCallStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     dialed_number: str | None = Field(default=None, max_length=20, pattern=r"^\+?[0-9]{5,15}$")
+    # The language the call opens in; the caller can switch at any time by speaking another language.
+    language: Literal["ta", "en", "hi"] | None = None
 
 
 # ---- accounts ------------------------------------------------------------------------------------

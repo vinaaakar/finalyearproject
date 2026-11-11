@@ -8,7 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from ..deps import StorePath, client_key, rate_limit
 from ..phone.simulator import SimulatorProvider
-from ..schemas import PhoneTurnRequest, SynthesizeRequest
+from ..schemas import PhoneCallStart, PhoneTurnRequest, SynthesizeRequest
 from ..speech.adapters import MAX_AUDIO_BYTES, SpeechError, capabilities
 from ..assistant.language import speech_receipt
 from ..stores import ORDER_PREFIX
@@ -80,8 +80,10 @@ def _simulator_enabled(request: Request) -> None:
 
 
 @router.post("/api/phone/simulator/{store_id}/calls", dependencies=[Depends(_simulator_enabled), Depends(rate_limit("chat"))])
-def simulator_start_call(store_id: StorePath, request: Request):
-    started = request.app.state.calls.start(store_id, client=client_key(request))
+def simulator_start_call(store_id: StorePath, request: Request, body: PhoneCallStart | None = None):
+    # The call opens in the chosen language, else the default voice language (Tamil unless configured otherwise).
+    language = (body.language if body else None) or request.app.state.settings.speech_default_language
+    started = request.app.state.calls.start(store_id, client=client_key(request), language=language)
     if started is None:
         raise HTTPException(429, "Too many calls. Please try again later.", headers={"Retry-After": "1800"})
     return simulator.render(started)

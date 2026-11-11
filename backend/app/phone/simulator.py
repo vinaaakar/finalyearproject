@@ -26,4 +26,5 @@ class SimulatorProvider(PhoneProvider):
             "expect_input": turn.expect_input,
             "hang_up": turn.hang_up,
             "transfer_to_agent": turn.transfer_to_agent,
+            "language": turn.language,
         }

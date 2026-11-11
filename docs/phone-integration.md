@@ -25,6 +25,30 @@ reset when the API restarts and are not shared between instances, so a multi-ins
 the counter memory bound is reached while every tracked entry is an active lockout, verification is refused until entries
 expire (it never forgets an active lockout).
 
+## What a caller can do (simulator, `app/phone/session.py`)
+
+Customers reach it from the storefront at **Contact us → Phone → Try the simulated customer-care call** (`/support/call`):
+a browser page that speaks Scout's / Maple's answers aloud and takes the caller's voice (same speech engines as the chat),
+keypad digits or typed text. It is labelled as a simulation everywhere.
+
+| Caller says / does | What happens |
+|---|---|
+| (call starts) | Greeting in Tamil by default (or the language chosen on the page), naming the assistant and what it can do, and that English and Hindi work too |
+| Any utterance | Language identified from the words (`assistant/language.py`); prompts follow it. "English" / "தமிழ்" / "हिंदी" alone switches explicitly |
+| "Where is my order?" | Order number (spoken, spelled "S A one zero…", or keyed) → shipping PIN code (any script: ६२५५२१, ௬௨…, or digit words) → status, readable date ("Friday, 13 November"), carrier and tracking |
+| Complaint, return, refund ("my headlamp arrived broken") | Verifies the order, then asks only for what is missing: item (pre-selected when the caller named it), reason, description (the caller's own words). Reads it back; saves only after "yes" / key 1. The reference the database returned is read out and spelled ("S A, C M P, 0 0 0 0 1"). Same rules as the website (`care_requests.py`): eligibility, return window, one open request per item, refunds simulated |
+| Ineligible return / refund | Says why, offers a complaint (key 1) or a request for the team (key 2) |
+| "Operator", "real person", "talk to someone" | Says honestly that **no one takes calls on this line** and offers to record a request for the team (`…-ESC-…`), after verifying an order; with no order, gives the support e-mail and hours. `transfer_to_agent` is never set |
+| "Status of my complaint" | Requests on the **verified order only** |
+| Silence | Asked again; never counted as a wrong PIN; three silent turns end the call politely |
+| A different question mid-verification | Answered from the main menu (a sentence that merely contains a number is not a PIN guess) |
+| "Cancel", "menu" | Back to the main menu; nothing recorded |
+| "Thanks", "bye", "நன்றி", "धन्यवाद", "no" (to "anything else?") | Polite goodbye, call ends |
+
+Privacy: a postal code is a weak secret, so a phone caller only ever hears about the one order they verified — never the
+customer's other orders or requests. Requests recorded by phone appear for the customer under **My requests** and for staff
+under **Staff → Customer care**, exactly like ones made on the website.
+
 ## Design
 
 ```
@@ -38,9 +62,11 @@ caller ─▶ telephony provider ─▶ provider adapter (webhook) ─▶ CallMa
 - `app/phone/session.py`: the provider-independent state machine:
   - greeting
   - general questions, answered by the shared assistant without any login
-  - order status, which requires the order number and then the shipping ZIP; 3 failures end the call
-  - transfer to a person
+  - order status, which requires the order number and then the shipping PIN code (ZIP for old US orders); 3 failures end the call
+  - customer-care requests (complaint, return, simulated refund, request for the team) on the verified order
+  - requests for a person: recorded for staff, never a fake transfer
   - goodbye
+- `app/phone/phone_text.py`: every phone prompt in Tamil, English and Hindi (not yet reviewed by a native speaker).
 - The store is chosen by the number that was dialed: `PHONE_NUMBER_STORE_MAP` in `.env`, for example
   `+15550100001=store-a`.
 
@@ -53,7 +79,7 @@ caller ─▶ telephony provider ─▶ provider adapter (webhook) ─▶ CallMa
 | Public HTTPS webhook URL | The provider must reach `/api/phone/<provider>/...`. Locally that means a tunnel (ngrok or Cloudflare Tunnel); in production, a hosted HTTPS endpoint |
 | Webhook signature verification | e.g. validate the `X-Twilio-Signature` header on every request |
 | Speech | Use the provider's built-in speech-to-text and text-to-speech, e.g. Twilio `<Gather input="speech dtmf">` and `<Say>`. Note that this sends caller audio to the provider. Alternatively, stream audio to a local engine (see `voice.md`) |
-| Human handoff | A number or queue to route to when `transfer_to_agent` is true |
+| Human handoff | Only if a staffed queue exists: the call flow would need to set `transfer_to_agent` (today it never does, and requests for a person are recorded instead) |
 | Compliance | Call-recording consent, data retention, and privacy notices for your region |
 
 ### Twilio example (not implemented)

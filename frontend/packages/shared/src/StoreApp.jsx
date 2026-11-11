@@ -13,6 +13,7 @@ import { StaffOrderPage, StaffOrdersPage } from './pages/StaffPages.jsx';
 import { StaffCarePage, StaffCareRequestPage } from './pages/StaffCarePages.jsx';
 import { CareNewPage, CareRequestPage, CareRequestsPage } from './pages/CarePages.jsx';
 import { ContactPage, HelpPage, ReturnsPage, ShippingPage } from './pages/SupportPages.jsx';
+import CallPage from './pages/CallPage.jsx';
 import { ForgotPasswordPage, RegisterPage, ResetPasswordPage } from './pages/AuthPages.jsx';
 import { UI_LANGUAGES, ui } from './uiText.js';
 import { DELIVERY_COUNTRY } from './currency.js';
@@ -132,6 +133,7 @@ export default function StoreApp({ config }) {
             <Route path="/support/requests" element={<CareRequestsPage />} />
             <Route path="/support/requests/:ref" element={<CareRequestPage />} />
             <Route path="/support/new" element={<CareNewPage />} />
+            <Route path="/support/call" element={<CallPage />} />
             <Route path="/help" element={<HelpPage />} />
             <Route path="/shipping" element={<ShippingPage />} />
             <Route path="/returns" element={<ReturnsPage />} />

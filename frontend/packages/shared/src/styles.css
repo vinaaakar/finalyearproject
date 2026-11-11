@@ -424,3 +424,24 @@ h3.product-name { margin: 0; font-family: var(--font-display); font-size: 1.08re
 .care-order-help { margin-top: 16px; }
 .care-order-help .detail-actions { flex-wrap: wrap; }
 @media (max-width: 540px) { .care-summary div { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Simulated customer-care call (pages/CallPage.jsx) */
+.call-card { display: grid; gap: 14px; padding: 18px; }
+.call-status { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.call-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.call-dot-live { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-bg); }
+.call-start { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.call-start select { width: auto; }
+.call-btn { min-width: 160px; }
+.call-log { list-style: none; margin: 0; padding: 12px; display: grid; gap: 8px; max-height: 340px; overflow-y: auto;
+  background: var(--surface-2); border-radius: var(--radius); }
+.call-line { padding: 8px 10px; border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
+.call-you { justify-self: end; background: var(--accent); color: var(--on-accent); }
+.call-you.muted { background: transparent; color: var(--muted); }
+.call-controls { display: grid; gap: 12px; justify-items: start; }
+.call-mic { min-width: 160px; }
+.call-mic.mic-on { background: var(--err); border-color: var(--err); color: var(--err-bg); }
+.call-keypad { display: grid; grid-template-columns: repeat(3, 64px); gap: 8px; }
+.call-key { min-height: 52px; padding: 0; font-size: 1.25rem; font-weight: 700; }
+.call-type { display: flex; gap: 8px; width: 100%; }
+.call-type input { flex: 1; min-width: 0; }

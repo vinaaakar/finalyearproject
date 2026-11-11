@@ -100,7 +100,7 @@ Code: `backend/app/care_requests.py` (all rules), `routers/care.py` (API), `assi
 ## Not supported by the system (documented, not simulated)
 Refund payouts (refunds are a simulated record only), return labels, exchanges, order or address edits after placing,
 account edits or deletion, invoices, discount codes, live chat with a person or callbacks, real e-mail delivery,
-real payments, real phone calls.
+real payments, real phone calls (the phone line is simulated in the browser).
 
 **Policy text vs. the app:** Summit Trail Co.'s returns policy says "Return shipping is free with the prepaid label
 from your account", but the app has no return labels. The assistant quotes the policy and says that returns are
@@ -113,7 +113,8 @@ arranged by e-mail. Either the policy text or the app should be updated.
 - Tamil and Hindi templates were written carefully but have not been reviewed by a native speaker.
 - Care tips are general advice, not product-specific instructions.
 - Spoken answers use the same text; long answers (e.g. policies) are read in full.
-- The phone simulator uses the same answers in English but shows no buttons.
+- The phone line is a simulator (`/support/call`, see `docs/phone-integration.md`): Tamil, English and Hindi prompts, keypad
+  choices instead of buttons, and care requests limited to the one order the caller verified with its PIN code.
 
 ## Tests
 
